@@ -13,12 +13,16 @@ namespace BasicLang.Compiler.CodeGen.CSharp
     public class CSharpCodeGenerator : ICodeGenerator
     {
         private readonly ImprovedCSharpCodeGenerator _generator;
+        private readonly ITypeMapper _typeMapper;
 
         public string BackendName => "C#";
+        public TargetPlatform Target => TargetPlatform.CSharp;
+        public ITypeMapper TypeMapper => _typeMapper;
 
         public CSharpCodeGenerator(CodeGenOptions options = null)
         {
             _generator = new ImprovedCSharpCodeGenerator(options);
+            _typeMapper = new CSharpTypeMapper();
         }
 
         public string Generate(IRModule module)

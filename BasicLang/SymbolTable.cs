@@ -18,6 +18,7 @@ public class TypeInfo
         public List<TypeInfo> GenericArguments { get; set; }
         public TypeInfo ElementType { get; set; } // For arrays
         public int ArrayRank { get; set; } // Number of dimensions
+        public int ArraySize { get; set; } // Size of array (for fixed-size arrays)
         public bool IsPointer { get; set; }
         public Dictionary<string, Symbol> Members { get; set; }
         
@@ -49,7 +50,11 @@ public class TypeInfo
         {
             if (Equals(other))
                 return true;
-                
+
+            // Object can accept any type (boxing)
+            if (Name == "Object")
+                return true;
+
             // Numeric conversions
             if (IsNumeric() && other.IsNumeric())
             {
@@ -388,16 +393,17 @@ public class TypeInfo
             return type;
         }
         
-        public TypeInfo CreateArrayType(TypeInfo elementType, int rank)
+        public TypeInfo CreateArrayType(TypeInfo elementType, int rank, int size = 0)
         {
             var name = $"{elementType.Name}[]";
-            
+
             var arrayType = new TypeInfo(name, TypeKind.Array)
             {
                 ElementType = elementType,
-                ArrayRank = rank
+                ArrayRank = rank,
+                ArraySize = size
             };
-            
+
             return arrayType;
         }
         

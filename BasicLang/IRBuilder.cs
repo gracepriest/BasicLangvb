@@ -488,6 +488,7 @@ namespace BasicLang.Compiler.IR
 
             // Generate case blocks
             var caseBlocks = new List<BasicBlock>();
+            int caseIndex = 0;
             foreach (var caseClause in node.Cases)
             {
                 if (caseClause.IsElse)
@@ -496,7 +497,7 @@ namespace BasicLang.Compiler.IR
                     continue;
                 }
 
-                var caseBlock = _currentFunction.CreateBlock("switch.case");
+                var caseBlock = _currentFunction.CreateBlock($"switch_case_{caseIndex++}");
                 caseBlocks.Add(caseBlock);
 
                 // Add case values
@@ -725,34 +726,71 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(DoLoopNode node)
         {
-            var bodyBlock = _currentFunction.CreateBlock("do.body");
             var condBlock = _currentFunction.CreateBlock("do.cond");
+            var bodyBlock = _currentFunction.CreateBlock("do.body");
             var endBlock = _currentFunction.CreateBlock("do.end");
 
-            EmitInstruction(new IRBranch(bodyBlock));
-
-            // Body block
-            _currentBlock = bodyBlock;
-            _loopStack.Push(new LoopContext(condBlock, endBlock));
-            node.Body.Accept(this);
-            _loopStack.Pop();
-
-            if (!_currentBlock.IsTerminated())
+            if (node.IsConditionAtStart && node.Condition != null)
             {
+                // Do While/Until ... Loop - condition at start (like a while loop)
                 EmitInstruction(new IRBranch(condBlock));
-            }
 
-            // Condition block
-            _currentBlock = condBlock;
-            if (node.Condition != null)
-            {
+                // Condition block
+                _currentBlock = condBlock;
                 node.Condition.Accept(this);
                 var condition = _expressionResult;
-                EmitInstruction(new IRConditionalBranch(condition, bodyBlock, endBlock));
+
+                // For Until, swap true/false branches
+                if (node.IsWhile)
+                    EmitInstruction(new IRConditionalBranch(condition, bodyBlock, endBlock));
+                else
+                    EmitInstruction(new IRConditionalBranch(condition, endBlock, bodyBlock));
+
+                // Body block
+                _currentBlock = bodyBlock;
+                _loopStack.Push(new LoopContext(condBlock, endBlock));
+                node.Body.Accept(this);
+                _loopStack.Pop();
+
+                if (!_currentBlock.IsTerminated())
+                {
+                    EmitInstruction(new IRBranch(condBlock));
+                }
             }
             else
             {
-                EmitInstruction(new IRBranch(endBlock));
+                // Do ... Loop While/Until - condition at end (or infinite loop)
+                EmitInstruction(new IRBranch(bodyBlock));
+
+                // Body block
+                _currentBlock = bodyBlock;
+                _loopStack.Push(new LoopContext(condBlock, endBlock));
+                node.Body.Accept(this);
+                _loopStack.Pop();
+
+                if (!_currentBlock.IsTerminated())
+                {
+                    EmitInstruction(new IRBranch(condBlock));
+                }
+
+                // Condition block
+                _currentBlock = condBlock;
+                if (node.Condition != null)
+                {
+                    node.Condition.Accept(this);
+                    var condition = _expressionResult;
+
+                    // For Until, swap true/false branches
+                    if (node.IsWhile)
+                        EmitInstruction(new IRConditionalBranch(condition, bodyBlock, endBlock));
+                    else
+                        EmitInstruction(new IRConditionalBranch(condition, endBlock, bodyBlock));
+                }
+                else
+                {
+                    // Infinite loop
+                    EmitInstruction(new IRBranch(bodyBlock));
+                }
             }
 
             // Continue with end block
@@ -811,6 +849,30 @@ namespace BasicLang.Compiler.IR
             else
             {
                 EmitInstruction(new IRReturn());
+            }
+        }
+
+        public void Visit(ExitStatementNode node)
+        {
+            switch (node.Kind)
+            {
+                case ExitKind.For:
+                case ExitKind.Do:
+                case ExitKind.While:
+                    // Jump to the break target of the current loop
+                    if (_loopStack.Count == 0)
+                    {
+                        throw new Exception($"Exit {node.Kind} outside of loop");
+                    }
+                    var loopContext = _loopStack.Peek();
+                    EmitInstruction(new IRBranch(loopContext.BreakTarget));
+                    break;
+
+                case ExitKind.Sub:
+                case ExitKind.Function:
+                    // Exit Sub/Function is like Return (without value for Sub)
+                    EmitInstruction(new IRReturn());
+                    break;
             }
         }
 

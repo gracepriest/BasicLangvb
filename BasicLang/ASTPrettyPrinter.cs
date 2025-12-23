@@ -452,7 +452,12 @@ namespace BasicLang.Compiler
                 Unindent();
             }
         }
-        
+
+        public void Visit(ExitStatementNode node)
+        {
+            WriteLine($"Exit {node.Kind}");
+        }
+
         public void Visit(AssignmentStatementNode node)
         {
             WriteLine($"Assignment ({node.Operator}):");

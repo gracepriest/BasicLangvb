@@ -36,6 +36,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             GlobalScope = new Scope("Global", ScopeKind.Global, null);
             _currentScope = GlobalScope;
 
+            // Register standard library functions
+            RegisterStdLibFunctions();
+
             try
             {
                 program.Accept(this);
@@ -68,6 +71,142 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private void SetNodeSymbol(ASTNode node, Symbol symbol)
         {
             _nodeSymbols[node] = symbol;
+        }
+
+        /// <summary>
+        /// Register standard library functions in the global scope
+        /// </summary>
+        private void RegisterStdLibFunctions()
+        {
+            // I/O Functions
+            RegisterStdLibFunction("Print", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("value", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("PrintLine", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("value", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("Input", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("prompt", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("ReadLine", SymbolKind.Function, _typeManager.GetType("String"),
+                Array.Empty<(string, TypeInfo)>());
+
+            // String Functions
+            RegisterStdLibFunction("Len", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("str", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("Mid", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("str", _typeManager.GetType("String")), ("start", _typeManager.GetType("Integer")), ("length", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("Left", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("str", _typeManager.GetType("String")), ("length", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("Right", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("str", _typeManager.GetType("String")), ("length", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("UCase", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("str", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("LCase", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("str", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("Trim", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("str", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("InStr", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("str", _typeManager.GetType("String")), ("search", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("Replace", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("str", _typeManager.GetType("String")), ("find", _typeManager.GetType("String")), ("replaceWith", _typeManager.GetType("String")) });
+
+            // Math Functions
+            RegisterStdLibFunction("Abs", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("value", _typeManager.GetType("Double")) });
+
+            RegisterStdLibFunction("Sqrt", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("value", _typeManager.GetType("Double")) });
+
+            RegisterStdLibFunction("Pow", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("baseVal", _typeManager.GetType("Double")), ("exponent", _typeManager.GetType("Double")) });
+
+            RegisterStdLibFunction("Sin", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("value", _typeManager.GetType("Double")) });
+
+            RegisterStdLibFunction("Cos", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("value", _typeManager.GetType("Double")) });
+
+            RegisterStdLibFunction("Tan", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("value", _typeManager.GetType("Double")) });
+
+            RegisterStdLibFunction("Log", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("value", _typeManager.GetType("Double")) });
+
+            RegisterStdLibFunction("Exp", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("value", _typeManager.GetType("Double")) });
+
+            RegisterStdLibFunction("Floor", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("value", _typeManager.GetType("Double")) });
+
+            RegisterStdLibFunction("Ceiling", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("value", _typeManager.GetType("Double")) });
+
+            RegisterStdLibFunction("Round", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("value", _typeManager.GetType("Double")) });
+
+            RegisterStdLibFunction("Min", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("a", _typeManager.GetType("Double")), ("b", _typeManager.GetType("Double")) });
+
+            RegisterStdLibFunction("Max", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("a", _typeManager.GetType("Double")), ("b", _typeManager.GetType("Double")) });
+
+            // Random Functions
+            RegisterStdLibFunction("Rnd", SymbolKind.Function, _typeManager.GetType("Double"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("Randomize", SymbolKind.Subroutine, _typeManager.VoidType,
+                Array.Empty<(string, TypeInfo)>());
+
+            // Conversion Functions
+            RegisterStdLibFunction("CInt", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("value", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("CLng", SymbolKind.Function, _typeManager.GetType("Long"),
+                new[] { ("value", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("CDbl", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("value", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("CSng", SymbolKind.Function, _typeManager.GetType("Single"),
+                new[] { ("value", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("CStr", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("value", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("CBool", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("value", _typeManager.GetType("Object")) });
+
+            // Array Functions
+            RegisterStdLibFunction("UBound", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("array", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("LBound", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("array", _typeManager.GetType("Object")) });
+        }
+
+        private void RegisterStdLibFunction(string name, SymbolKind kind, TypeInfo returnType, (string name, TypeInfo type)[] parameters)
+        {
+            var symbol = new Symbol(name, kind, returnType, 0, 0)
+            {
+                ReturnType = returnType,
+                IsDefined = true
+            };
+
+            foreach (var param in parameters)
+            {
+                symbol.Parameters.Add(new Symbol(param.name, SymbolKind.Parameter, param.type, 0, 0));
+            }
+
+            GlobalScope.Define(symbol);
         }
 
         private void Error(string message, int line, int column)
@@ -116,7 +255,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     Error($"Unknown type '{typeRef.Name}'", 0, 0);
                     return _typeManager.ObjectType;
                 }
-                return _typeManager.CreateArrayType(elementType, typeRef.ArrayDimensions.Count);
+                // Get the array size from the first dimension (for 1D arrays)
+                int arraySize = typeRef.ArrayDimensions.Count > 0 ? typeRef.ArrayDimensions[0] : 0;
+                return _typeManager.CreateArrayType(elementType, typeRef.ArrayDimensions.Count, arraySize);
             }
 
             // Handle generic types
@@ -855,6 +996,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
                           node.Line, node.Column);
                 }
             }
+        }
+
+        public void Visit(ExitStatementNode node)
+        {
+            // Exit Sub/Function should be inside a sub/function
+            if (node.Kind == ExitKind.Sub || node.Kind == ExitKind.Function)
+            {
+                var functionScope = _currentScope.GetFunctionScope();
+                if (functionScope == null)
+                {
+                    Error($"Exit {node.Kind} outside of {node.Kind.ToString().ToLower()}", node.Line, node.Column);
+                }
+            }
+            // Exit For/Do/While should be inside a loop - we'll validate at IR generation or let C# handle it
         }
 
         public void Visit(AssignmentStatementNode node)

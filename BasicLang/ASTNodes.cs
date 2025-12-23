@@ -50,6 +50,7 @@ namespace BasicLang.Compiler.AST
         void Visit(TryStatementNode node);
         void Visit(CatchClauseNode node);
         void Visit(ReturnStatementNode node);
+        void Visit(ExitStatementNode node);
         void Visit(AssignmentStatementNode node);
         void Visit(ExpressionStatementNode node);
         void Visit(BinaryExpressionNode node);
@@ -471,10 +472,11 @@ namespace BasicLang.Compiler.AST
     {
         public ExpressionNode Condition { get; set; }
         public BlockNode Body { get; set; }
-        public bool IsWhile { get; set; }
-        
+        public bool IsWhile { get; set; }  // true = While, false = Until
+        public bool IsConditionAtStart { get; set; }  // true = Do While/Until...Loop, false = Do...Loop While/Until
+
         public DoLoopNode(int line, int column) : base(line, column) { }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     
@@ -517,12 +519,23 @@ namespace BasicLang.Compiler.AST
     public class ReturnStatementNode : StatementNode
     {
         public ExpressionNode Value { get; set; }
-        
+
         public ReturnStatementNode(int line, int column) : base(line, column) { }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
-    
+
+    public enum ExitKind { For, Do, While, Sub, Function }
+
+    public class ExitStatementNode : StatementNode
+    {
+        public ExitKind Kind { get; set; }
+
+        public ExitStatementNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
     public class AssignmentStatementNode : StatementNode
     {
         public ExpressionNode Target { get; set; }

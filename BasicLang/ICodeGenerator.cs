@@ -6,6 +6,17 @@ using BasicLang.Compiler.SemanticAnalysis;
 namespace BasicLang.Compiler.CodeGen
 {
     /// <summary>
+    /// Target platforms supported by the compiler
+    /// </summary>
+    public enum TargetPlatform
+    {
+        CSharp,
+        Cpp,
+        LLVM,
+        MSIL
+    }
+
+    /// <summary>
     /// Abstract interface for all code generators
     /// Enables pluggable backends for different target languages
     /// </summary>
@@ -15,11 +26,52 @@ namespace BasicLang.Compiler.CodeGen
         /// Generate code from IR module
         /// </summary>
         string Generate(IRModule module);
-        
+
         /// <summary>
         /// Get the backend name
         /// </summary>
         string BackendName { get; }
+
+        /// <summary>
+        /// Get the target platform
+        /// </summary>
+        TargetPlatform Target { get; }
+
+        /// <summary>
+        /// Get the type mapper for this backend
+        /// </summary>
+        ITypeMapper TypeMapper { get; }
+    }
+
+    /// <summary>
+    /// Interface for mapping BasicLang types to target language types
+    /// </summary>
+    public interface ITypeMapper
+    {
+        /// <summary>
+        /// Map a BasicLang type to target language type string
+        /// </summary>
+        string MapType(TypeInfo type);
+
+        /// <summary>
+        /// Map a binary operator to target language operator
+        /// </summary>
+        string MapBinaryOperator(BinaryOpKind op);
+
+        /// <summary>
+        /// Map a comparison operator to target language operator
+        /// </summary>
+        string MapComparisonOperator(CompareKind op);
+
+        /// <summary>
+        /// Map a unary operator to target language operator
+        /// </summary>
+        string MapUnaryOperator(UnaryOpKind op);
+
+        /// <summary>
+        /// Get default value expression for a type
+        /// </summary>
+        string GetDefaultValue(TypeInfo type);
     }
     
     /// <summary>
@@ -33,9 +85,12 @@ namespace BasicLang.Compiler.CodeGen
         protected readonly Dictionary<IRValue, string> _valueNames;
         protected readonly HashSet<string> _usings;
         protected readonly Dictionary<string, string> _typeMap;
-        
+        protected ITypeMapper _typeMapper;
+
         public abstract string BackendName { get; }
-        
+        public abstract TargetPlatform Target { get; }
+        public ITypeMapper TypeMapper => _typeMapper;
+
         protected CodeGeneratorBase()
         {
             _indentLevel = 0;
@@ -45,7 +100,7 @@ namespace BasicLang.Compiler.CodeGen
             _typeMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             InitializeTypeMap();
         }
-        
+
         /// <summary>
         /// Initialize language-specific type mappings
         /// Override in derived classes

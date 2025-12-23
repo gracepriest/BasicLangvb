@@ -17,15 +17,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private readonly CppCodeGenOptions _options;
         private readonly HashSet<IRValue> _allTemporaries;
         private readonly List<string> _headerIncludes;
-        
+
         public override string BackendName => "C++";
-        
+        public override TargetPlatform Target => TargetPlatform.Cpp;
+
         public CppCodeGenerator(CppCodeGenOptions options = null)
         {
             _output = new StringBuilder();
             _options = options ?? new CppCodeGenOptions();
             _allTemporaries = new HashSet<IRValue>();
             _headerIncludes = new List<string> { "iostream", "vector", "string", "memory" };
+            _typeMapper = new CppTypeMapper();
         }
         
         public override string Generate(IRModule module)

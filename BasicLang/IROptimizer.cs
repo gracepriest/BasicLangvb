@@ -55,13 +55,25 @@ namespace BasicLang.Compiler.IR.Optimization
             for (int i = 0; i < block.Instructions.Count; i++)
             {
                 var instruction = block.Instructions[i];
-                
+
                 if (instruction is IRBinaryOp binaryOp)
                 {
                     var folded = TryFoldBinary(binaryOp);
                     if (folded != null)
                     {
-                        block.Instructions[i] = folded;
+                        // Update all references to the old instruction
+                        ReplaceAllReferences(block, binaryOp, folded);
+
+                        // If this was a named variable (not a temp), preserve assignment
+                        if (IsNamedVariable(binaryOp.Name))
+                        {
+                            var targetVar = new IRVariable(binaryOp.Name, binaryOp.Type);
+                            block.Instructions[i] = new IRAssignment(targetVar, folded);
+                        }
+                        else
+                        {
+                            block.Instructions[i] = folded;
+                        }
                         ReportModification();
                     }
                 }
@@ -70,7 +82,19 @@ namespace BasicLang.Compiler.IR.Optimization
                     var folded = TryFoldUnary(unaryOp);
                     if (folded != null)
                     {
-                        block.Instructions[i] = folded;
+                        // Update all references to the old instruction
+                        ReplaceAllReferences(block, unaryOp, folded);
+
+                        // If this was a named variable (not a temp), preserve assignment
+                        if (IsNamedVariable(unaryOp.Name))
+                        {
+                            var targetVar = new IRVariable(unaryOp.Name, unaryOp.Type);
+                            block.Instructions[i] = new IRAssignment(targetVar, folded);
+                        }
+                        else
+                        {
+                            block.Instructions[i] = folded;
+                        }
                         ReportModification();
                     }
                 }
@@ -79,9 +103,82 @@ namespace BasicLang.Compiler.IR.Optimization
                     var folded = TryFoldCompare(compare);
                     if (folded != null)
                     {
-                        block.Instructions[i] = folded;
+                        // Update all references to the old instruction
+                        ReplaceAllReferences(block, compare, folded);
+
+                        // If this was a named variable (not a temp), preserve assignment
+                        if (IsNamedVariable(compare.Name))
+                        {
+                            var targetVar = new IRVariable(compare.Name, compare.Type);
+                            block.Instructions[i] = new IRAssignment(targetVar, folded);
+                        }
+                        else
+                        {
+                            block.Instructions[i] = folded;
+                        }
                         ReportModification();
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Check if a name represents a real variable (not a temp)
+        /// </summary>
+        private bool IsNamedVariable(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            // Temp names typically start with _tmp, t, or are numeric
+            if (name.StartsWith("_tmp", StringComparison.OrdinalIgnoreCase)) return false;
+            if (name.StartsWith("t", StringComparison.OrdinalIgnoreCase) && name.Length > 1 && char.IsDigit(name[1])) return false;
+            return true;
+        }
+
+        /// <summary>
+        /// Replace all references to oldValue with newValue in the block
+        /// </summary>
+        private void ReplaceAllReferences(BasicBlock block, IRValue oldValue, IRValue newValue)
+        {
+            foreach (var inst in block.Instructions)
+            {
+                if (inst is IRBinaryOp binOp)
+                {
+                    if (ReferenceEquals(binOp.Left, oldValue)) binOp.Left = newValue;
+                    if (ReferenceEquals(binOp.Right, oldValue)) binOp.Right = newValue;
+                }
+                else if (inst is IRUnaryOp unOp)
+                {
+                    if (ReferenceEquals(unOp.Operand, oldValue)) unOp.Operand = newValue;
+                }
+                else if (inst is IRCompare cmp)
+                {
+                    if (ReferenceEquals(cmp.Left, oldValue)) cmp.Left = newValue;
+                    if (ReferenceEquals(cmp.Right, oldValue)) cmp.Right = newValue;
+                }
+                else if (inst is IRAssignment asg)
+                {
+                    if (ReferenceEquals(asg.Value, oldValue)) asg.Value = newValue;
+                }
+                else if (inst is IRStore store)
+                {
+                    if (ReferenceEquals(store.Value, oldValue)) store.Value = newValue;
+                    if (ReferenceEquals(store.Address, oldValue)) store.Address = newValue;
+                }
+                else if (inst is IRCall call)
+                {
+                    for (int j = 0; j < call.Arguments.Count; j++)
+                    {
+                        if (ReferenceEquals(call.Arguments[j], oldValue))
+                            call.Arguments[j] = newValue;
+                    }
+                }
+                else if (inst is IRReturn ret)
+                {
+                    if (ReferenceEquals(ret.Value, oldValue)) ret.Value = newValue;
+                }
+                else if (inst is IRConditionalBranch condBr)
+                {
+                    if (ReferenceEquals(condBr.Condition, oldValue)) condBr.Condition = newValue;
                 }
             }
         }

@@ -1,14 +1,20 @@
 using System;
+using System.Collections.Generic;
 
 namespace BasicLang.Compiler.CodeGen
 {
     /// <summary>
-    /// Configuration options for C# code generation
+    /// Configuration options for code generation
     /// </summary>
     public class CodeGenOptions
     {
         /// <summary>
-        /// Namespace for generated code
+        /// Target backend platform
+        /// </summary>
+        public TargetPlatform TargetBackend { get; set; } = TargetPlatform.CSharp;
+
+        /// <summary>
+        /// Namespace for generated code (C#, C++)
         /// </summary>
         public string Namespace { get; set; } = "GeneratedCode";
         
@@ -56,5 +62,28 @@ namespace BasicLang.Compiler.CodeGen
         /// Whether to generate XML documentation comments
         /// </summary>
         public bool GenerateXmlDocs { get; set; } = false;
+
+        /// <summary>
+        /// Backend-specific options dictionary
+        /// </summary>
+        public Dictionary<string, object> BackendOptions { get; set; } = new Dictionary<string, object>();
+
+        /// <summary>
+        /// Get a backend-specific option with default value
+        /// </summary>
+        public T GetBackendOption<T>(string key, T defaultValue = default)
+        {
+            if (BackendOptions.TryGetValue(key, out var value) && value is T typedValue)
+                return typedValue;
+            return defaultValue;
+        }
+
+        /// <summary>
+        /// Set a backend-specific option
+        /// </summary>
+        public void SetBackendOption(string key, object value)
+        {
+            BackendOptions[key] = value;
+        }
     }
 }

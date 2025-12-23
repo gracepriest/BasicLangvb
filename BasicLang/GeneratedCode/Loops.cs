@@ -7,8 +7,8 @@ namespace GeneratedCode
     {
         public static int SumNumbers(int n)
         {
-            int sum = 0;
-            int i = 0;
+            int sum = default(int);
+            int i = default(int);
 
             sum = 0;
             i = 1;
@@ -22,9 +22,10 @@ namespace GeneratedCode
 
         public static void Main()
         {
-            int total = 0;
+            int total = default(int);
 
             total = SumNumbers(100);
+            return;
         }
 
     }

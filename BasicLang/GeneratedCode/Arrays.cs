@@ -7,8 +7,8 @@ namespace GeneratedCode
     {
         public static int FindMax(int[] arr)
         {
-            int max = 0;
-            int i = 0;
+            int max = default(int);
+            int i = default(int);
 
             max = arr[0];
             i = 1;
@@ -25,10 +25,11 @@ namespace GeneratedCode
 
         public static void Main()
         {
-            int[] numbers = new int[10];
-            int maximum = 0;
+            int[] numbers = default(int[]);
+            int maximum = default(int);
 
             maximum = FindMax(numbers);
+            return;
         }
 
     }

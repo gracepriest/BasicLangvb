@@ -835,6 +835,8 @@ namespace BasicLang.Compiler
                 return ParseTryStatement();
             if (Check(TokenType.Return))
                 return ParseReturnStatement();
+            if (Check(TokenType.Exit))
+                return ParseExitStatement();
             if (Check(TokenType.Dim))
                 return ParseVariableDeclaration();
             if (Check(TokenType.Auto))
@@ -1053,13 +1055,35 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Do, "Expected 'Do'");
             var node = new DoLoopNode(token.Line, token.Column);
 
+            // Check for condition at start: Do While/Until <condition>
+            if (Match(TokenType.While))
+            {
+                node.IsConditionAtStart = true;
+                node.IsWhile = true;
+                node.Condition = ParseExpression();
+            }
+            else if (Match(TokenType.Until))
+            {
+                node.IsConditionAtStart = true;
+                node.IsWhile = false;
+                node.Condition = ParseExpression();
+            }
+
             ConsumeNewlines();
             node.Body = ParseBlock(TokenType.Loop);
             Consume(TokenType.Loop, "Expected 'Loop'");
 
+            // Check for condition at end: Loop While/Until <condition>
             if (Match(TokenType.While))
             {
+                node.IsConditionAtStart = false;
                 node.IsWhile = true;
+                node.Condition = ParseExpression();
+            }
+            else if (Match(TokenType.Until))
+            {
+                node.IsConditionAtStart = false;
+                node.IsWhile = false;
                 node.Condition = ParseExpression();
             }
 
@@ -1107,6 +1131,45 @@ namespace BasicLang.Compiler
             if (!Check(TokenType.Newline) && !IsAtEnd())
             {
                 node.Value = ParseExpression();
+            }
+
+            return node;
+        }
+
+        private ExitStatementNode ParseExitStatement()
+        {
+            var token = Consume(TokenType.Exit, "Expected 'Exit'");
+            var node = new ExitStatementNode(token.Line, token.Column);
+
+            // Expect the kind of exit: For, Do, While, Sub, Function
+            if (Check(TokenType.For))
+            {
+                Advance();
+                node.Kind = ExitKind.For;
+            }
+            else if (Check(TokenType.Do))
+            {
+                Advance();
+                node.Kind = ExitKind.Do;
+            }
+            else if (Check(TokenType.While))
+            {
+                Advance();
+                node.Kind = ExitKind.While;
+            }
+            else if (Check(TokenType.Sub))
+            {
+                Advance();
+                node.Kind = ExitKind.Sub;
+            }
+            else if (Check(TokenType.Function))
+            {
+                Advance();
+                node.Kind = ExitKind.Function;
+            }
+            else
+            {
+                throw new ParseException("Expected 'For', 'Do', 'While', 'Sub', or 'Function' after 'Exit'", Peek());
             }
 
             return node;

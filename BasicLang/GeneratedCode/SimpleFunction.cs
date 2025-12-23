@@ -12,11 +12,10 @@ namespace GeneratedCode
 
         public static void Main()
         {
-            int result = 0;
+            int result = default(int);
 
             result = Add(5, 3);
-            Console.WriteLine("The result is:");
-            Console.WriteLine(result);
+            return;
         }
 
     }

@@ -7,7 +7,7 @@ namespace GeneratedCode
     {
         public static bool IsPrime(int n)
         {
-            int i = 0;
+            int i = default(int);
 
             if (n <= 1)
             {
@@ -31,8 +31,8 @@ namespace GeneratedCode
 
         public static int CountPrimes(int max)
         {
-            int count = 0;
-            int i = 0;
+            int count = default(int);
+            int i = default(int);
 
             count = 0;
             i = 2;
@@ -49,9 +49,10 @@ namespace GeneratedCode
 
         public static void Main()
         {
-            int primeCount = 0;
+            int primeCount = default(int);
 
             primeCount = CountPrimes(100);
+            return;
         }
 
     }

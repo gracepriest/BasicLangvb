@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
+using BasicLang.Compiler.StdLib;
+using BasicLang.Compiler.StdLib.CSharp;
 
 namespace BasicLang.Compiler.CodeGen.CSharp
 {
@@ -42,6 +44,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         // For structured control flow generation
         private HashSet<BasicBlock> _processedBlocks;
 
+        // Stack of loop end blocks for break detection
+        private Stack<BasicBlock> _loopEndBlocks;
+
+        // Standard library provider for built-in functions
+        private readonly CSharpStdLibProvider _stdLib;
+
         public string GeneratedCode => _output.ToString();
 
         public ImprovedCSharpCodeGenerator(CodeGenOptions options = null)
@@ -56,6 +64,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _declaredIdentifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             _tempDefsByName = new Dictionary<string, IRValue>(StringComparer.OrdinalIgnoreCase);
             _useCounts = new Dictionary<IRValue, int>();
+
+            // Initialize standard library provider
+            _stdLib = new CSharpStdLibProvider();
 
             // Initialize type mapping
             _typeMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -217,7 +228,20 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 if (declared.Add(varName))
                 {
                     var csharpType = MapType(localVar.Type);
-                    WriteLine($"{csharpType} {varName} = default({csharpType});");
+                    string defaultValue;
+
+                    // Check if this is an array with a specific size
+                    if (localVar.Type?.Kind == TypeKind.Array && localVar.Type.ArraySize > 0)
+                    {
+                        var elementType = MapType(localVar.Type.ElementType);
+                        defaultValue = $"new {elementType}[{localVar.Type.ArraySize}]";
+                    }
+                    else
+                    {
+                        defaultValue = GetDefaultValue(localVar.Type);
+                    }
+
+                    WriteLine($"{csharpType} {varName} = {defaultValue};");
                 }
             }
 
@@ -226,6 +250,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             // Body - use structured control flow generation
             _processedBlocks = new HashSet<BasicBlock>();
+            _loopEndBlocks = new Stack<BasicBlock>();
             if (function.EntryBlock != null)
                 GenerateStructuredBlock(function.EntryBlock);
 
@@ -304,6 +329,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 // Return is handled by Visit(IRReturn)
             }
+            else if (terminator is IRSwitch switchInst)
+            {
+                HandleSwitchStatement(switchInst);
+            }
             // For other terminators, the Visit method handles them
         }
 
@@ -312,7 +341,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             foreach (var instruction in block.Instructions)
             {
                 // Skip control flow - we handle it structurally
-                if (instruction is IRBranch or IRConditionalBranch)
+                if (instruction is IRBranch or IRConditionalBranch or IRSwitch)
                     continue;
 
                 if (!ShouldEmitInstruction(instruction))
@@ -329,9 +358,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var falseBlock = condBranch.FalseTarget;
 
             // Detect loop patterns
-            if (IsLoopHeader(trueBlock, falseBlock, out var loopBody, out var loopEnd, out var loopInc, out var loopType))
+            if (IsLoopHeader(trueBlock, falseBlock, out var loopBody, out var loopEnd, out var loopInc, out var loopType, out var negateCondition))
             {
-                GenerateLoop(condition, loopBody, loopEnd, loopInc, loopType);
+                // For Until loops, negate the condition
+                var loopCondition = negateCondition ? $"!({condition})" : condition;
+                GenerateLoop(loopCondition, loopBody, loopEnd, loopInc, loopType);
                 return;
             }
 
@@ -381,24 +412,113 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             GenerateStructuredBlock(target);
         }
 
+        private void HandleSwitchStatement(IRSwitch switchInst)
+        {
+            var value = EmitExpression(switchInst.Value);
+
+            WriteLine($"switch ({value})");
+            WriteLine("{");
+            Indent();
+
+            // Group cases by their target block
+            var casesByBlock = new Dictionary<BasicBlock, List<IRValue>>();
+            foreach (var (caseValue, target) in switchInst.Cases)
+            {
+                if (!casesByBlock.ContainsKey(target))
+                    casesByBlock[target] = new List<IRValue>();
+                casesByBlock[target].Add(caseValue);
+            }
+
+            // Emit each case group with inline body
+            foreach (var (block, caseValues) in casesByBlock)
+            {
+                // Emit case labels
+                foreach (var caseValue in caseValues)
+                {
+                    var caseExpr = EmitExpression(caseValue);
+                    WriteLine($"case {caseExpr}:");
+                }
+
+                // Mark block as processed so it's not emitted again
+                _processedBlocks.Add(block);
+
+                // Emit the case body with indentation
+                Indent();
+                EmitBlockInstructions(block);
+
+                // Check if block ends with a return (no break needed)
+                var terminator = block.Instructions.LastOrDefault();
+                if (terminator is IRReturn)
+                {
+                    // Return already emitted
+                }
+                else if (terminator is IRBranch br && br.Target.Name.Contains("switch.end"))
+                {
+                    // Jump to switch end - emit break
+                    WriteLine("break;");
+                }
+                else if (terminator is IRBranch branch)
+                {
+                    // Process the branch target (might have more code)
+                    HandleUnconditionalBranch(branch);
+                    WriteLine("break;");
+                }
+                else
+                {
+                    // Default: add break
+                    WriteLine("break;");
+                }
+
+                Unindent();
+            }
+
+            // Emit default case
+            var defaultBlock = switchInst.DefaultTarget;
+            WriteLine("default:");
+            _processedBlocks.Add(defaultBlock);
+            Indent();
+            EmitBlockInstructions(defaultBlock);
+
+            var defaultTerminator = defaultBlock.Instructions.LastOrDefault();
+            if (defaultTerminator is IRReturn)
+            {
+                // Return already emitted
+            }
+            else
+            {
+                WriteLine("break;");
+            }
+            Unindent();
+
+            Unindent();
+            WriteLine("}");
+
+            // Find and process switch.end block
+            var endBlock = _currentFunction.Blocks.FirstOrDefault(b => b.Name == "switch.end");
+            if (endBlock != null && !_processedBlocks.Contains(endBlock))
+            {
+                GenerateStructuredBlock(endBlock);
+            }
+        }
+
         private bool IsLoopHeader(BasicBlock trueBlock, BasicBlock falseBlock,
-            out BasicBlock loopBody, out BasicBlock loopEnd, out BasicBlock loopInc, out string loopType)
+            out BasicBlock loopBody, out BasicBlock loopEnd, out BasicBlock loopInc, out string loopType, out bool negateCondition)
         {
             loopBody = null;
             loopEnd = null;
             loopInc = null;
             loopType = null;
+            negateCondition = false;
 
-            // For loop: condition block branches to body (true) and end (false)
+            // Standard pattern: condition block branches to body (true) and end (false)
             if (trueBlock.Name.Contains(".body") && falseBlock.Name.Contains(".end"))
             {
                 loopBody = trueBlock;
                 loopEnd = falseBlock;
+                negateCondition = false;
 
-                // Find increment block if it exists (for loops)
-                loopInc = _currentFunction.Blocks.FirstOrDefault(b =>
-                    b.Name.Replace("for.", "").Replace("foreach.", "").Replace("while.", "") == "inc" &&
-                    b.Name.StartsWith(trueBlock.Name.Split('.')[0]));
+                // Find increment block through body block's terminator (more reliable than name matching)
+                loopInc = FindIncrementBlock(trueBlock);
 
                 if (trueBlock.Name.StartsWith("for.") || trueBlock.Name.StartsWith("foreach."))
                     loopType = "for";
@@ -412,11 +532,63 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return true;
             }
 
+            // Until pattern: branches are swapped (end on true, body on false)
+            if (trueBlock.Name.Contains(".end") && falseBlock.Name.Contains(".body"))
+            {
+                loopBody = falseBlock;
+                loopEnd = trueBlock;
+                negateCondition = true;  // Need to negate condition for Until loops
+
+                // Find increment block through body block's terminator
+                loopInc = FindIncrementBlock(falseBlock);
+
+                if (falseBlock.Name.StartsWith("for.") || falseBlock.Name.StartsWith("foreach."))
+                    loopType = "for";
+                else if (falseBlock.Name.StartsWith("while."))
+                    loopType = "while";
+                else if (falseBlock.Name.StartsWith("do."))
+                    loopType = "do";
+                else
+                    loopType = "while";
+
+                return true;
+            }
+
             return false;
+        }
+
+        /// <summary>
+        /// Find the increment block by following the body block's branch target.
+        /// This is more reliable than name matching when there are multiple loops.
+        /// </summary>
+        private BasicBlock FindIncrementBlock(BasicBlock bodyBlock)
+        {
+            // The body block should end with a branch to the increment block
+            var terminator = bodyBlock.Instructions.LastOrDefault();
+            if (terminator is IRBranch branch && branch.Target.Name.Contains(".inc"))
+            {
+                return branch.Target;
+            }
+
+            // If body has nested control flow, we need to trace through to find the inc block
+            // Check all blocks that the body might branch to
+            foreach (var instruction in bodyBlock.Instructions)
+            {
+                if (instruction is IRBranch br && br.Target.Name.Contains(".inc"))
+                {
+                    return br.Target;
+                }
+            }
+
+            return null;
         }
 
         private void GenerateLoop(string condition, BasicBlock bodyBlock, BasicBlock endBlock, BasicBlock incBlock, string loopType)
         {
+            // Push the loop end block so inner code can emit 'break' when targeting it
+            if (endBlock != null)
+                _loopEndBlocks.Push(endBlock);
+
             WriteLine($"while ({condition})");
             WriteLine("{");
             Indent();
@@ -442,6 +614,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             Unindent();
             WriteLine("}");
+
+            // Pop the loop end block
+            if (endBlock != null)
+                _loopEndBlocks.Pop();
 
             // Continue after the loop
             if (endBlock != null && !_processedBlocks.Contains(endBlock))
@@ -508,12 +684,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _processedBlocks.Add(thenBlock);
             EmitBlockInstructions(thenBlock);
 
-            // Handle then block's terminator (might have nested control flow or return)
+            // Handle then block's terminator (might have nested control flow, return, or break)
             var thenTerminator = thenBlock.Instructions.LastOrDefault();
             if (thenTerminator is IRConditionalBranch thenCond)
                 HandleConditionalBranch(thenCond);
-            else if (thenTerminator is IRBranch thenBranch && !_processedBlocks.Contains(thenBranch.Target))
-                HandleUnconditionalBranch(thenBranch);
+            else if (thenTerminator is IRBranch thenBranch)
+            {
+                if (IsLoopEndBlock(thenBranch.Target))
+                    WriteLine("break;");
+                else if (!_processedBlocks.Contains(thenBranch.Target))
+                    HandleUnconditionalBranch(thenBranch);
+            }
 
             Unindent();
             WriteLine("}");
@@ -528,8 +709,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var elseTerminator = elseBlock.Instructions.LastOrDefault();
             if (elseTerminator is IRConditionalBranch elseCond)
                 HandleConditionalBranch(elseCond);
-            else if (elseTerminator is IRBranch elseBranch && !_processedBlocks.Contains(elseBranch.Target))
-                HandleUnconditionalBranch(elseBranch);
+            else if (elseTerminator is IRBranch elseBranch)
+            {
+                if (IsLoopEndBlock(elseBranch.Target))
+                    WriteLine("break;");
+                else if (!_processedBlocks.Contains(elseBranch.Target))
+                    HandleUnconditionalBranch(elseBranch);
+            }
 
             Unindent();
             WriteLine("}");
@@ -561,8 +747,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var thenTerminator = thenBlock.Instructions.LastOrDefault();
             if (thenTerminator is IRConditionalBranch thenCond)
                 HandleConditionalBranch(thenCond);
-            else if (thenTerminator is IRBranch thenBranch && !_processedBlocks.Contains(thenBranch.Target))
-                HandleUnconditionalBranch(thenBranch);
+            else if (thenTerminator is IRBranch thenBranch)
+            {
+                // Check if this is a break (branch to loop end)
+                if (IsLoopEndBlock(thenBranch.Target))
+                    WriteLine("break;");
+                else if (!_processedBlocks.Contains(thenBranch.Target))
+                    HandleUnconditionalBranch(thenBranch);
+            }
 
             Unindent();
             WriteLine("}");
@@ -579,6 +771,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 else if (mergeTerminator is IRBranch mergeBranch)
                     HandleUnconditionalBranch(mergeBranch);
             }
+        }
+
+        private bool IsLoopEndBlock(BasicBlock block)
+        {
+            if (block == null || _loopEndBlocks.Count == 0)
+                return false;
+            return _loopEndBlocks.Contains(block);
         }
 
         private bool ShouldEmitInstruction(IRInstruction instruction)
@@ -735,8 +934,21 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                     case IRCall call:
                     {
+                        var argExprs = call.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
+
+                        // Check if this is a standard library function
+                        if (_stdLib.CanHandle(call.FunctionName))
+                        {
+                            // Add required imports
+                            foreach (var import in _stdLib.GetRequiredImports(call.FunctionName))
+                            {
+                                _usings.Add(import);
+                            }
+                            return _stdLib.EmitCall(call.FunctionName, argExprs);
+                        }
+
                         var fn = SanitizeName(call.FunctionName);
-                        var args = string.Join(", ", call.Arguments.Select(a => EmitExpression(a, stack, false)));
+                        var args = string.Join(", ", argExprs);
                         return $"{fn}({args})";
                     }
 
@@ -906,23 +1118,50 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRCall call)
         {
-            var args = string.Join(", ", call.Arguments.Select(EmitExpression));
-            var functionName = SanitizeName(call.FunctionName);
+            var argExprs = call.Arguments.Select(EmitExpression).ToArray();
+            var functionName = call.FunctionName;
 
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+            // Check if this is a standard library function
+            if (_stdLib.CanHandle(functionName))
+            {
+                var stdLibCall = _stdLib.EmitCall(functionName, argExprs);
+
+                // Add required imports
+                foreach (var import in _stdLib.GetRequiredImports(functionName))
+                {
+                    _usings.Add(import);
+                }
+
+                if (hasReturn && IsNamedDestination(call))
+                {
+                    var target = GetValueName(call);
+                    WriteLine($"{target} = {stdLibCall};");
+                    return;
+                }
+
+                // Emit as statement (for void functions like Print)
+                WriteLine($"{stdLibCall};");
+                return;
+            }
+
+            // Regular function call
+            var args = string.Join(", ", argExprs);
+            var sanitizedName = SanitizeName(functionName);
 
             // If this call is explicitly targeted at a declared variable, emit assignment.
             if (hasReturn && IsNamedDestination(call))
             {
                 var target = GetValueName(call);
-                WriteLine($"{target} = {functionName}({args});");
+                WriteLine($"{target} = {sanitizedName}({args});");
                 return;
             }
 
             // Otherwise emit as statement when result unused / void
             if (!hasReturn || GetUseCount(call) == 0)
             {
-                WriteLine($"{functionName}({args});");
+                WriteLine($"{sanitizedName}({args});");
                 return;
             }
 
@@ -939,6 +1178,19 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             else
             {
+                // Skip unnecessary "return;" at end of void methods
+                // Check if this is the last instruction in a void function
+                bool isVoidFunction = _currentFunction?.ReturnType == null ||
+                    _currentFunction.ReturnType.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+                bool isLastBlock = ret.ParentBlock?.Successors?.Count == 0;
+
+                if (isVoidFunction && isLastBlock)
+                {
+                    // Don't emit unnecessary return at end of void method
+                    return;
+                }
+
                 WriteLine("return;");
             }
         }
@@ -1061,6 +1313,28 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
 
             return type.Name;
+        }
+
+        private string GetDefaultValue(TypeInfo type)
+        {
+            if (type == null)
+                return "null";
+
+            var typeName = type.Name?.ToLower() ?? "";
+
+            return typeName switch
+            {
+                "integer" => "0",
+                "long" => "0L",
+                "single" => "0.0f",
+                "double" => "0.0",
+                "boolean" => "false",
+                "char" => "'\\0'",
+                "string" => "\"\"",
+                _ when type.Kind == TypeKind.Array => "null",
+                _ when type.Kind == TypeKind.Pointer => "null",
+                _ => "null"
+            };
         }
 
         private string MapBinaryOperator(BinaryOpKind op) => op switch

@@ -4,7 +4,13 @@
       "Bash(dotnet build:*)",
       "Bash(dotnet run:*)",
       "Bash(findstr:*)",
-      "Bash(Select-String -Pattern \"error\")"
+      "Bash(Select-String -Pattern \"error\")",
+      "Bash(find:*)",
+      "Bash(Select-String -Pattern \"\\(error|Build succeeded\\)\")",
+      "Bash(dotnet new:*)",
+      "Bash(copy:*)",
+      "Bash(Select-String -Pattern \"\\(error|warning CS0\\)\")",
+      "Bash(Select-String -Pattern \"Demo 13\" -Context 0,80)"
     ]
   }
 }

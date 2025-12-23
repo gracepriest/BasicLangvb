@@ -66,7 +66,9 @@ namespace BasicLang.Compiler
         Each,
         In,
         Step,
-        
+        Exit,
+        Until,
+
         // Keywords - Functions and Subroutines
         Sub,
         Function,
@@ -278,7 +280,9 @@ namespace BasicLang.Compiler
             { "Each", TokenType.Each },
             { "In", TokenType.In },
             { "Step", TokenType.Step },
-            
+            { "Exit", TokenType.Exit },
+            { "Until", TokenType.Until },
+
             // Functions and Subroutines
             { "Sub", TokenType.Sub },
             { "Function", TokenType.Function },
@@ -324,14 +328,12 @@ namespace BasicLang.Compiler
             // Delegates
             { "Delegate", TokenType.Delegate },
             
-            // Built-in Functions
+            // Built-in Functions (special syntax, not regular function calls)
             { "AddressOf", TokenType.AddressOf },
-            { "Len", TokenType.Len },
-            { "Mid", TokenType.Mid },
-            { "UBound", TokenType.UBound },
             { "SizeOf", TokenType.SizeOf },
             { "AllocateMemory", TokenType.AllocateMemory },
             { "DeallocateMemory", TokenType.DeallocateMemory },
+            // Note: Len, Mid, UBound are stdlib functions, not keywords - they parse as identifiers
             
             // Logical Operators
             { "And", TokenType.And },
