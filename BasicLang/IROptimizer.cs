@@ -352,18 +352,25 @@ namespace BasicLang.Compiler.IR.Optimization
         private void RemoveDeadInstructions(BasicBlock block)
         {
             var used = new HashSet<IRValue>();
-            
+
             // Mark instructions that are used
             foreach (var inst in block.Instructions)
             {
                 MarkUsed(inst, used);
             }
-            
+
             // Remove unused assignments
             for (int i = block.Instructions.Count - 1; i >= 0; i--)
             {
                 var inst = block.Instructions[i];
-                
+
+                // Don't remove instructions that represent assignments to named variables
+                // (non-temp names indicate the result is assigned to a real variable)
+                if (inst is IRValue v && !string.IsNullOrEmpty(v.Name) && !v.Name.StartsWith("_tmp"))
+                {
+                    continue;
+                }
+
                 if (inst is IRBinaryOp binaryOp && !used.Contains(binaryOp))
                 {
                     block.Instructions.RemoveAt(i);

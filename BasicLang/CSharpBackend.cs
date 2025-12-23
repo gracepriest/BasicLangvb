@@ -8,22 +8,39 @@ using BasicLang.Compiler.SemanticAnalysis;
 namespace BasicLang.Compiler.CodeGen.CSharp
 {
     /// <summary>
-    /// Improved C# code generator with two-pass approach for better temporary handling
+    /// Improved C# code generator.
+    ///
+    /// IMPORTANT: This generator intentionally avoids emitting compiler-temporary locals (t0, t1, ...)
+    /// by inlining SSA IR values into C# expressions whenever it is safe/possible.
+    ///
+    /// Rule of thumb:
+    /// - If an IR value has a Name that matches a real declared variable (local/param/global), we emit a statement assignment.
+    /// - Otherwise, we treat it as an expression-only value and inline it where referenced (return, if-condition, RHS, etc.).
+    /// - Calls are emitted as statements if their result is assigned to a declared variable or if the result is otherwise unused.
     /// </summary>
     public class ImprovedCSharpCodeGenerator : IIRVisitor
     {
         private readonly StringBuilder _output;
         private readonly CodeGenOptions _options;
         private int _indentLevel;
+
         private readonly Dictionary<string, string> _typeMap;
         private readonly HashSet<string> _usings;
+
+        private IRModule _currentModule;
         private IRFunction _currentFunction;
 
-        // Two-pass approach: first collect all temporaries, then generate code
-        private readonly HashSet<IRValue> _allTemporaries;
+        // Name mapping and declared identifier tracking
         private readonly Dictionary<IRValue, string> _valueNames;
-        private readonly Dictionary<string, string> _variableNameMap; // Maps variable names to sanitized names
-        private int _tempCounter;
+        private readonly Dictionary<string, string> _variableNameMap; // logical name -> sanitized C# name
+        private readonly HashSet<string> _declaredIdentifiers;         // logical names (locals/params/globals)
+        private readonly Dictionary<string, IRValue> _tempDefsByName;  // tempName -> defining IRValue (only for non-declared names)
+
+        // Use counts help decide whether to emit calls as statements or inline them into expressions
+        private readonly Dictionary<IRValue, int> _useCounts;
+
+        // For structured control flow generation
+        private HashSet<BasicBlock> _processedBlocks;
 
         public string GeneratedCode => _output.ToString();
 
@@ -32,11 +49,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _output = new StringBuilder();
             _options = options ?? new CodeGenOptions();
             _indentLevel = 0;
+
             _usings = new HashSet<string>();
-            _allTemporaries = new HashSet<IRValue>();
             _valueNames = new Dictionary<IRValue, string>();
             _variableNameMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            _tempCounter = 0;
+            _declaredIdentifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            _tempDefsByName = new Dictionary<string, IRValue>(StringComparer.OrdinalIgnoreCase);
+            _useCounts = new Dictionary<IRValue, int>();
 
             // Initialize type mapping
             _typeMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -52,7 +71,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 { "Object", "object" }
             };
 
-            // Add default usings
+            // Default using
             _usings.Add("System");
         }
 
@@ -61,6 +80,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// </summary>
         public string Generate(IRModule module)
         {
+            _currentModule = module;
+
             _output.Clear();
             _indentLevel = 0;
             _usings.Clear();
@@ -69,24 +90,23 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _usings.Add("System");
             _usings.Add("System.Collections.Generic");
 
-            // Generate using directives
+            // Emit using directives
             foreach (var usingDirective in _usings.OrderBy(u => u))
-            {
                 WriteLine($"using {usingDirective};");
-            }
+
             WriteLine();
 
-            // Generate namespace
+            // Namespace
             WriteLine($"namespace {_options.Namespace}");
             WriteLine("{");
             Indent();
 
-            // Generate main class
+            // Class
             WriteLine($"{_options.ClassAccessModifier} class {_options.ClassName}");
             WriteLine("{");
             Indent();
 
-            // Generate global variables
+            // Globals
             if (module.GlobalVariables.Count > 0)
             {
                 WriteLine("// Global variables");
@@ -99,42 +119,35 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 WriteLine();
             }
 
-            // Generate functions
+            // Functions
             bool hasUserMain = false;
             foreach (var function in module.Functions)
             {
-                if (!function.IsExternal)
-                {
-                    GenerateFunction(function);
-                    WriteLine();
+                if (function.IsExternal) continue;
 
-                    // Track if user defined Main (Sub Main or Function Main)
-                    if (function.Name.Equals("Main", StringComparison.OrdinalIgnoreCase))
-                    {
-                        hasUserMain = true;
-                    }
-                }
+                GenerateFunction(function);
+                WriteLine();
+
+                if (function.Name.Equals("Main", StringComparison.OrdinalIgnoreCase))
+                    hasUserMain = true;
             }
 
-            // Generate Main entry point if requested and user didn't define one
+            // Optional default Main
             if (_options.GenerateMainMethod && !hasUserMain)
-            {
-                GenerateMainMethod(module);
-            }
+                GenerateMainMethod();
 
             Unindent();
-            WriteLine("}"); // End class
+            WriteLine("}");
 
             Unindent();
-            WriteLine("}"); // End namespace
+            WriteLine("}");
 
+            _currentModule = null;
             return _output.ToString();
         }
 
-        private void GenerateMainMethod(IRModule module)
+        private void GenerateMainMethod()
         {
-            // This method is only called if no user-defined Main exists
-            // Generate a default entry point
             WriteLine("static void Main(string[] args)");
             WriteLine("{");
             Indent();
@@ -146,91 +159,75 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private void GenerateFunction(IRFunction function)
         {
             _currentFunction = function;
-            _allTemporaries.Clear();
+
             _valueNames.Clear();
             _variableNameMap.Clear();
-            _tempCounter = 0;
+            _declaredIdentifiers.Clear();
+            _tempDefsByName.Clear();
+            _useCounts.Clear();
 
-            // Map parameters first
+            // Track declared identifiers (params, locals, globals)
+            foreach (var param in function.Parameters)
+                _declaredIdentifiers.Add(param.Name);
+
+            foreach (var local in function.LocalVariables)
+                _declaredIdentifiers.Add(local.Name);
+
+            if (_currentModule != null)
+            {
+                foreach (var g in _currentModule.GlobalVariables.Values)
+                    _declaredIdentifiers.Add(g.Name);
+            }
+
+            // Map parameters and locals to sanitized names
             foreach (var param in function.Parameters)
             {
-                var sanitizedName = SanitizeName(param.Name);
-                _valueNames[param] = sanitizedName;
-                _variableNameMap[param.Name] = sanitizedName;
+                var sanitized = SanitizeName(param.Name);
+                _valueNames[param] = sanitized;
+                _variableNameMap[param.Name] = sanitized;
             }
 
-            // Map local variables (from Dim statements)
             foreach (var localVar in function.LocalVariables)
             {
-                var sanitizedName = SanitizeName(localVar.Name);
-                _valueNames[localVar] = sanitizedName;
-                _variableNameMap[localVar.Name] = sanitizedName;
+                var sanitized = SanitizeName(localVar.Name);
+                _valueNames[localVar] = sanitized;
+                _variableNameMap[localVar.Name] = sanitized;
             }
 
-            // Pass 1: Collect all temporaries and assign names
-            // (must happen AFTER local variables are mapped)
-            CollectTemporaries(function);
+            AnalyzeUseCounts(function);
+            BuildTempDefinitions(function);
 
-            // Generate function signature
+            // Signature
             var returnType = MapType(function.ReturnType);
             var functionName = SanitizeName(function.Name);
 
-            var paramList = new List<string>();
-            foreach (var p in function.Parameters)
-            {
-                var paramType = MapType(p.Type);
-                var paramName = SanitizeName(p.Name);
-                paramList.Add($"{paramType} {paramName}");
-            }
-            var parameters = string.Join(", ", paramList);
+            var parameters = string.Join(", ", function.Parameters.Select(p =>
+                $"{MapType(p.Type)} {GetValueName(p)}"));
 
             WriteLine($"{_options.MethodAccessModifier} static {returnType} {functionName}({parameters})");
 
             WriteLine("{");
             Indent();
 
-            // Declare local variables (from Dim statements)
-            var declaredNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // Declare locals (ONLY real locals; no compiler temps)
+            var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var localVar in function.LocalVariables)
             {
                 var varName = GetValueName(localVar);
-                if (!declaredNames.Contains(varName))
+                if (declared.Add(varName))
                 {
                     var csharpType = MapType(localVar.Type);
                     WriteLine($"{csharpType} {varName} = default({csharpType});");
-                    declaredNames.Add(varName);
                 }
             }
 
-            // Declare all temporaries (but skip local variables we already declared)
-            var tempsByType = _allTemporaries
-                .GroupBy(t => t.Type?.Name ?? "object")
-                .ToList();
-
-            foreach (var group in tempsByType)
-            {
-                var csharpType = MapType(group.First().Type);
-                var tempNames = group.Select(GetValueName).Distinct();
-
-                foreach (var tempName in tempNames)
-                {
-                    // Skip if already declared as a local variable
-                    if (!declaredNames.Contains(tempName))
-                    {
-                        WriteLine($"{csharpType} {tempName} = default({csharpType});");
-                        declaredNames.Add(tempName);
-                    }
-                }
-            }
-
-            if (function.LocalVariables.Count > 0 || _allTemporaries.Count > 0)
+            if (function.LocalVariables.Count > 0)
                 WriteLine();
 
-            // Pass 2: Generate code
+            // Body - use structured control flow generation
+            _processedBlocks = new HashSet<BasicBlock>();
             if (function.EntryBlock != null)
-            {
-                GenerateBlock(function.EntryBlock, new HashSet<BasicBlock>());
-            }
+                GenerateStructuredBlock(function.EntryBlock);
 
             Unindent();
             WriteLine("}");
@@ -238,132 +235,592 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _currentFunction = null;
         }
 
-        private void CollectTemporaries(IRFunction function)
+        private void AnalyzeUseCounts(IRFunction function)
         {
-            // Build set of local variable names to detect renamed temporaries
-            var localVarNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var localVar in function.LocalVariables)
-            {
-                localVarNames.Add(localVar.Name);
-            }
-
-            // Also include parameter names
-            foreach (var param in function.Parameters)
-            {
-                localVarNames.Add(param.Name);
-            }
-
             foreach (var block in function.Blocks)
             {
-                foreach (var instruction in block.Instructions)
+                foreach (var instr in block.Instructions)
                 {
-                    // Skip non-value instructions
-                    if (!(instruction is IRValue value))
-                        continue;
-
-                    // Skip constants - they don't need declarations
-                    if (value is IRConstant)
-                        continue;
-
-                    // Skip parameters - they're declared in the signature
-                    if (value is IRVariable variable && variable.IsParameter)
-                        continue;
-
-                    // Skip if this value's Name matches a local variable or parameter
-                    // (IRBuilder renames calls/ops to target variable to avoid extra assignments)
-                    if (!string.IsNullOrEmpty(value.Name) && localVarNames.Contains(value.Name))
+                    foreach (var op in GetOperands(instr))
                     {
-                        continue;
+                        if (op == null) continue;
+                        _useCounts.TryGetValue(op, out var c);
+                        _useCounts[op] = c + 1;
                     }
+                }
+            }
+        }
 
-                    // Skip IRAssignment - we handle the target variable, not the assignment itself
-                    if (instruction is IRAssignment)
+        private void BuildTempDefinitions(IRFunction function)
+        {
+            // Only map "temp-like" names (i.e., not declared locals/params/globals).
+            foreach (var block in function.Blocks)
+            {
+                foreach (var instr in block.Instructions)
+                {
+                    if (instr is not IRValue v) continue;
+                    if (string.IsNullOrEmpty(v.Name)) continue;
+
+                    if (_declaredIdentifiers.Contains(v.Name))
                         continue;
 
-                    _allTemporaries.Add(value);
+                    // first definition wins (good enough for simple SSA-style temp regs)
+                    if (!_tempDefsByName.ContainsKey(v.Name))
+                        _tempDefsByName[v.Name] = v;
                 }
             }
         }
 
         private void GenerateBlock(BasicBlock block, HashSet<BasicBlock> visited)
         {
-            if (visited.Contains(block))
+            GenerateStructuredBlock(block);
+        }
+
+        /// <summary>
+        /// Generate structured C# code from a basic block, recognizing control flow patterns.
+        /// </summary>
+        private void GenerateStructuredBlock(BasicBlock block)
+        {
+            if (block == null || _processedBlocks.Contains(block))
                 return;
 
-            visited.Add(block);
+            _processedBlocks.Add(block);
 
-            // Generate label if block has multiple predecessors
-            if (block.Predecessors.Count > 1 || block != _currentFunction.EntryBlock)
+            // Emit non-control-flow instructions
+            EmitBlockInstructions(block);
+
+            // Handle the terminator instruction with structured control flow
+            var terminator = block.Instructions.LastOrDefault();
+
+            if (terminator is IRConditionalBranch condBranch)
             {
-                Unindent();
-                WriteLine($"{block.Name}:");
-                Indent();
+                HandleConditionalBranch(condBranch);
             }
+            else if (terminator is IRBranch branch)
+            {
+                HandleUnconditionalBranch(branch);
+            }
+            else if (terminator is IRReturn ret)
+            {
+                // Return is handled by Visit(IRReturn)
+            }
+            // For other terminators, the Visit method handles them
+        }
 
-            // Generate instructions
+        private void EmitBlockInstructions(BasicBlock block)
+        {
             foreach (var instruction in block.Instructions)
             {
+                // Skip control flow - we handle it structurally
+                if (instruction is IRBranch or IRConditionalBranch)
+                    continue;
+
+                if (!ShouldEmitInstruction(instruction))
+                    continue;
+
                 instruction.Accept(this);
             }
+        }
 
-            // Process successors
-            foreach (var successor in block.Successors.Where(s => !visited.Contains(s)))
+        private void HandleConditionalBranch(IRConditionalBranch condBranch)
+        {
+            var condition = EmitExpression(condBranch.Condition);
+            var trueBlock = condBranch.TrueTarget;
+            var falseBlock = condBranch.FalseTarget;
+
+            // Detect loop patterns
+            if (IsLoopHeader(trueBlock, falseBlock, out var loopBody, out var loopEnd, out var loopInc, out var loopType))
             {
-                GenerateBlock(successor, visited);
+                GenerateLoop(condition, loopBody, loopEnd, loopInc, loopType);
+                return;
             }
+
+            // Detect if-then-else pattern
+            if (IsIfThenElse(trueBlock, falseBlock, out var thenBlock, out var elseBlock, out var mergeBlock))
+            {
+                GenerateIfThenElse(condition, thenBlock, elseBlock, mergeBlock);
+                return;
+            }
+
+            // Detect simple if-then pattern (no else)
+            if (IsIfThen(trueBlock, falseBlock, out thenBlock, out mergeBlock))
+            {
+                GenerateIfThen(condition, thenBlock, mergeBlock);
+                return;
+            }
+
+            // Fallback: emit goto-style code
+            WriteLine($"if ({condition})");
+            WriteLine("{");
+            Indent();
+            GenerateStructuredBlock(trueBlock);
+            Unindent();
+            WriteLine("}");
+            WriteLine("else");
+            WriteLine("{");
+            Indent();
+            GenerateStructuredBlock(falseBlock);
+            Unindent();
+            WriteLine("}");
+        }
+
+        private void HandleUnconditionalBranch(IRBranch branch)
+        {
+            var target = branch.Target;
+
+            // If the target is already processed or is a loop back-edge, skip
+            // (the loop structure handles continuation)
+            if (_processedBlocks.Contains(target))
+                return;
+
+            // If target is a merge block or loop end, we've already handled it
+            if (target.Name.EndsWith(".end"))
+                return;
+
+            // Continue with the next block
+            GenerateStructuredBlock(target);
+        }
+
+        private bool IsLoopHeader(BasicBlock trueBlock, BasicBlock falseBlock,
+            out BasicBlock loopBody, out BasicBlock loopEnd, out BasicBlock loopInc, out string loopType)
+        {
+            loopBody = null;
+            loopEnd = null;
+            loopInc = null;
+            loopType = null;
+
+            // For loop: condition block branches to body (true) and end (false)
+            if (trueBlock.Name.Contains(".body") && falseBlock.Name.Contains(".end"))
+            {
+                loopBody = trueBlock;
+                loopEnd = falseBlock;
+
+                // Find increment block if it exists (for loops)
+                loopInc = _currentFunction.Blocks.FirstOrDefault(b =>
+                    b.Name.Replace("for.", "").Replace("foreach.", "").Replace("while.", "") == "inc" &&
+                    b.Name.StartsWith(trueBlock.Name.Split('.')[0]));
+
+                if (trueBlock.Name.StartsWith("for.") || trueBlock.Name.StartsWith("foreach."))
+                    loopType = "for";
+                else if (trueBlock.Name.StartsWith("while."))
+                    loopType = "while";
+                else if (trueBlock.Name.StartsWith("do."))
+                    loopType = "do";
+                else
+                    loopType = "while";
+
+                return true;
+            }
+
+            return false;
+        }
+
+        private void GenerateLoop(string condition, BasicBlock bodyBlock, BasicBlock endBlock, BasicBlock incBlock, string loopType)
+        {
+            WriteLine($"while ({condition})");
+            WriteLine("{");
+            Indent();
+
+            // Generate body
+            _processedBlocks.Add(bodyBlock);
+            EmitBlockInstructions(bodyBlock);
+
+            // Handle body's terminator
+            var bodyTerminator = bodyBlock.Instructions.LastOrDefault();
+            if (bodyTerminator is IRConditionalBranch innerCond)
+            {
+                // Nested control flow in loop body
+                HandleConditionalBranch(innerCond);
+            }
+
+            // Always generate increment if it exists
+            if (incBlock != null && !_processedBlocks.Contains(incBlock))
+            {
+                _processedBlocks.Add(incBlock);
+                EmitBlockInstructions(incBlock);
+            }
+
+            Unindent();
+            WriteLine("}");
+
+            // Continue after the loop
+            if (endBlock != null && !_processedBlocks.Contains(endBlock))
+            {
+                _processedBlocks.Add(endBlock);
+                EmitBlockInstructions(endBlock);
+
+                // Handle end block's terminator
+                var endTerminator = endBlock.Instructions.LastOrDefault();
+                if (endTerminator is IRConditionalBranch endCond)
+                    HandleConditionalBranch(endCond);
+                else if (endTerminator is IRBranch endBranch)
+                    HandleUnconditionalBranch(endBranch);
+            }
+        }
+
+        private bool IsIfThenElse(BasicBlock trueBlock, BasicBlock falseBlock,
+            out BasicBlock thenBlock, out BasicBlock elseBlock, out BasicBlock mergeBlock)
+        {
+            thenBlock = null;
+            elseBlock = null;
+            mergeBlock = null;
+
+            // Pattern: true -> if.then, false -> if.else, both merge at if.end
+            if (trueBlock.Name.Contains(".then") && falseBlock.Name.Contains(".else"))
+            {
+                thenBlock = trueBlock;
+                elseBlock = falseBlock;
+
+                // Find merge block
+                mergeBlock = _currentFunction.Blocks.FirstOrDefault(b =>
+                    b.Name.EndsWith(".end") &&
+                    b.Name.StartsWith(trueBlock.Name.Split('.')[0]));
+
+                return mergeBlock != null;
+            }
+
+            return false;
+        }
+
+        private bool IsIfThen(BasicBlock trueBlock, BasicBlock falseBlock,
+            out BasicBlock thenBlock, out BasicBlock mergeBlock)
+        {
+            thenBlock = null;
+            mergeBlock = null;
+
+            // Pattern: true -> if.then, false -> if.end (no else)
+            if (trueBlock.Name.Contains(".then") && falseBlock.Name.Contains(".end"))
+            {
+                thenBlock = trueBlock;
+                mergeBlock = falseBlock;
+                return true;
+            }
+
+            return false;
+        }
+
+        private void GenerateIfThenElse(string condition, BasicBlock thenBlock, BasicBlock elseBlock, BasicBlock mergeBlock)
+        {
+            WriteLine($"if ({condition})");
+            WriteLine("{");
+            Indent();
+
+            _processedBlocks.Add(thenBlock);
+            EmitBlockInstructions(thenBlock);
+
+            // Handle then block's terminator (might have nested control flow or return)
+            var thenTerminator = thenBlock.Instructions.LastOrDefault();
+            if (thenTerminator is IRConditionalBranch thenCond)
+                HandleConditionalBranch(thenCond);
+            else if (thenTerminator is IRBranch thenBranch && !_processedBlocks.Contains(thenBranch.Target))
+                HandleUnconditionalBranch(thenBranch);
+
+            Unindent();
+            WriteLine("}");
+            WriteLine("else");
+            WriteLine("{");
+            Indent();
+
+            _processedBlocks.Add(elseBlock);
+            EmitBlockInstructions(elseBlock);
+
+            // Handle else block's terminator
+            var elseTerminator = elseBlock.Instructions.LastOrDefault();
+            if (elseTerminator is IRConditionalBranch elseCond)
+                HandleConditionalBranch(elseCond);
+            else if (elseTerminator is IRBranch elseBranch && !_processedBlocks.Contains(elseBranch.Target))
+                HandleUnconditionalBranch(elseBranch);
+
+            Unindent();
+            WriteLine("}");
+
+            // Continue after merge
+            if (mergeBlock != null && !_processedBlocks.Contains(mergeBlock))
+            {
+                _processedBlocks.Add(mergeBlock);
+                EmitBlockInstructions(mergeBlock);
+
+                var mergeTerminator = mergeBlock.Instructions.LastOrDefault();
+                if (mergeTerminator is IRConditionalBranch mergeCond)
+                    HandleConditionalBranch(mergeCond);
+                else if (mergeTerminator is IRBranch mergeBranch)
+                    HandleUnconditionalBranch(mergeBranch);
+            }
+        }
+
+        private void GenerateIfThen(string condition, BasicBlock thenBlock, BasicBlock mergeBlock)
+        {
+            WriteLine($"if ({condition})");
+            WriteLine("{");
+            Indent();
+
+            _processedBlocks.Add(thenBlock);
+            EmitBlockInstructions(thenBlock);
+
+            // Handle then block's terminator
+            var thenTerminator = thenBlock.Instructions.LastOrDefault();
+            if (thenTerminator is IRConditionalBranch thenCond)
+                HandleConditionalBranch(thenCond);
+            else if (thenTerminator is IRBranch thenBranch && !_processedBlocks.Contains(thenBranch.Target))
+                HandleUnconditionalBranch(thenBranch);
+
+            Unindent();
+            WriteLine("}");
+
+            // Continue after merge
+            if (mergeBlock != null && !_processedBlocks.Contains(mergeBlock))
+            {
+                _processedBlocks.Add(mergeBlock);
+                EmitBlockInstructions(mergeBlock);
+
+                var mergeTerminator = mergeBlock.Instructions.LastOrDefault();
+                if (mergeTerminator is IRConditionalBranch mergeCond)
+                    HandleConditionalBranch(mergeCond);
+                else if (mergeTerminator is IRBranch mergeBranch)
+                    HandleUnconditionalBranch(mergeBranch);
+            }
+        }
+
+        private bool ShouldEmitInstruction(IRInstruction instruction)
+        {
+            // Non-values are usually control-flow or statements and should be emitted
+            if (instruction is IRReturn or IRBranch or IRConditionalBranch or IRSwitch or IRLabel)
+                return true;
+
+            if (instruction is IRComment)
+                return _options.GenerateComments;
+
+            if (instruction is IRStore or IRAssignment)
+                return true;
+
+            if (instruction is IRAlloca or IRPhi)
+                return false;
+
+            if (instruction is IRCall call)
+            {
+                // void calls are statements
+                var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+                // If the IRCall is explicitly named as a declared variable destination, emit assignment statement
+                if (IsNamedDestination(call))
+                    return true;
+
+                // If the result is unused, emit as a statement call (for side effects)
+                if (!hasReturn || GetUseCount(call) == 0)
+                    return true;
+
+                // Otherwise, we inline it into expressions (no temp locals)
+                return false;
+            }
+
+            if (instruction is IRValue v)
+            {
+                // Only emit expression-producing values when they represent an assignment
+                // to a real declared variable (local/param/global). Otherwise inline.
+                return IsNamedDestination(v);
+            }
+
+            return true;
+        }
+
+        private int GetUseCount(IRValue value) => _useCounts.TryGetValue(value, out var c) ? c : 0;
+
+        private bool IsNamedDestination(IRValue value)
+        {
+            if (value == null) return false;
+            if (string.IsNullOrEmpty(value.Name)) return false;
+            return _declaredIdentifiers.Contains(value.Name);
         }
 
         private string GetValueName(IRValue value)
         {
             if (value is IRConstant constant)
-            {
                 return EmitConstant(constant);
-            }
 
-            // First try exact object reference lookup
             if (_valueNames.TryGetValue(value, out var name))
+                return name;
+
+            if (value is IRVariable variable)
             {
+                if (_variableNameMap.TryGetValue(variable.Name, out var mapped))
+                {
+                    _valueNames[value] = mapped;
+                    return mapped;
+                }
+
+                name = SanitizeName(variable.Name);
+                _variableNameMap[variable.Name] = name;
+                _valueNames[value] = name;
                 return name;
             }
 
-            // For variables, try name-based lookup (handles case where different 
-            // IRVariable objects represent the same logical variable)
-            if (value is IRVariable variable)
+            if (!string.IsNullOrEmpty(value.Name))
             {
-                if (_variableNameMap.TryGetValue(variable.Name, out var mappedName))
-                {
-                    // Cache the mapping for this object too
-                    _valueNames[value] = mappedName;
-                    return mappedName;
-                }
+                // Named value: sanitize and cache (this includes IRBinaryOp renamed to a real variable, etc.)
+                name = SanitizeName(value.Name);
 
-                // Create new name
-                name = SanitizeName(variable.Name);
-                _variableNameMap[variable.Name] = name;
-            }
-            // For calls, binary ops, etc. - use their Name property if set
-            // (IRBuilder may have renamed them to the target variable)
-            else if (!string.IsNullOrEmpty(value.Name))
-            {
-                // Check if this Name corresponds to a known local variable
-                // (IRBuilder renames call results to target variable)
-                if (_variableNameMap.TryGetValue(value.Name, out var existingName))
-                {
-                    name = existingName;
-                }
+                if (_variableNameMap.TryGetValue(value.Name, out var mapped))
+                    name = mapped;
                 else
-                {
-                    name = SanitizeName(value.Name);
                     _variableNameMap[value.Name] = name;
-                }
-            }
-            else
-            {
-                name = $"t{_tempCounter++}";
+
+                _valueNames[value] = name;
+                return name;
             }
 
+            // Unnamed / compiler-temp values should not become locals; but if we end up here,
+            // fall back to a stable-ish name to avoid nulls.
+            name = "_tmp";
             _valueNames[value] = name;
             return name;
+        }
+
+        private string EmitExpression(IRValue value) => EmitExpression(value, new HashSet<IRValue>(), false);
+
+        /// <summary>
+        /// Emit an expression, optionally wrapping in parentheses if it's a compound expression used as a sub-expression.
+        /// </summary>
+        private string EmitExpression(IRValue value, HashSet<IRValue> stack, bool needsParens = false)
+        {
+            if (value == null) return string.Empty;
+
+            // Prevent infinite recursion on weird cyclic graphs
+            if (!stack.Add(value))
+                return GetValueName(value);
+
+            try
+            {
+                switch (value)
+                {
+                    case IRConstant c:
+                        return EmitConstant(c);
+
+                    case IRVariable v:
+                        // If it's a real variable, use its name; if it's a temp "register",
+                        // try to inline its defining value.
+                        if (_declaredIdentifiers.Contains(v.Name) || v.IsParameter || v.IsGlobal)
+                            return GetValueName(v);
+
+                        if (!string.IsNullOrEmpty(v.Name) && _tempDefsByName.TryGetValue(v.Name, out var def))
+                            return EmitExpression(def, stack, needsParens);
+
+                        return GetValueName(v);
+
+                    case IRBinaryOp bin:
+                    {
+                        // Sub-expressions need parens to preserve precedence
+                        var left = EmitExpression(bin.Left, stack, true);
+                        var right = EmitExpression(bin.Right, stack, true);
+                        var op = MapBinaryOperator(bin.Operation);
+                        var expr = $"{left} {op} {right}";
+                        return needsParens ? $"({expr})" : expr;
+                    }
+
+                    case IRUnaryOp un:
+                    {
+                        var operand = EmitExpression(un.Operand, stack, true);
+                        var op = MapUnaryOperator(un.Operation);
+                        var expr = $"{op}{operand}";
+                        return needsParens ? $"({expr})" : expr;
+                    }
+
+                    case IRCompare cmp:
+                    {
+                        var left = EmitExpression(cmp.Left, stack, true);
+                        var right = EmitExpression(cmp.Right, stack, true);
+                        var op = MapCompareOperator(cmp.Comparison);
+                        var expr = $"{left} {op} {right}";
+                        return needsParens ? $"({expr})" : expr;
+                    }
+
+                    case IRCall call:
+                    {
+                        var fn = SanitizeName(call.FunctionName);
+                        var args = string.Join(", ", call.Arguments.Select(a => EmitExpression(a, stack, false)));
+                        return $"{fn}({args})";
+                    }
+
+                    case IRLoad load:
+                        return EmitExpression(load.Address, stack, needsParens);
+
+                    case IRGetElementPtr gep:
+                    {
+                        var baseExpr = EmitExpression(gep.BasePointer, stack, false);
+                        var indices = string.Join(", ", gep.Indices.Select(i => EmitExpression(i, stack, false)));
+                        return $"{baseExpr}[{indices}]";
+                    }
+
+                    case IRCast cast:
+                    {
+                        var target = MapType(cast.Type);
+                        var expr = EmitExpression(cast.Value, stack, false);
+                        return $"({target}){expr}";
+                    }
+
+                    case IRAlloca alloca:
+                    {
+                        // IRBuilder sometimes uses <name>_addr as an address placeholder.
+                        // In C#, treat it as just <name>.
+                        if (!string.IsNullOrEmpty(alloca.Name) &&
+                            alloca.Name.EndsWith("_addr", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var baseName = alloca.Name.Substring(0, alloca.Name.Length - "_addr".Length);
+                            return SanitizeName(baseName);
+                        }
+                        return SanitizeName(alloca.Name);
+                    }
+
+                    default:
+                        // If it's a named destination, use it; otherwise try defs-by-name.
+                        if (!string.IsNullOrEmpty(value.Name) && !_declaredIdentifiers.Contains(value.Name) &&
+                            _tempDefsByName.TryGetValue(value.Name, out var def2) && !ReferenceEquals(def2, value))
+                        {
+                            return EmitExpression(def2, stack, needsParens);
+                        }
+                        return GetValueName(value);
+                }
+            }
+            finally
+            {
+                stack.Remove(value);
+            }
+        }
+
+        private IEnumerable<IRValue> GetOperands(IRInstruction instr)
+        {
+            switch (instr)
+            {
+                case IRBinaryOp bin:
+                    return new[] { bin.Left, bin.Right };
+                case IRUnaryOp un:
+                    return new[] { un.Operand };
+                case IRCompare cmp:
+                    return new[] { cmp.Left, cmp.Right };
+                case IRCast cast:
+                    return new[] { cast.Value };
+                case IRCall call:
+                    return call.Arguments;
+                case IRAssignment asg:
+                    return new[] { asg.Value, asg.Target };
+                case IRLoad load:
+                    return new[] { load.Address };
+                case IRStore store:
+                    return new[] { store.Address, store.Value };
+                case IRReturn ret:
+                    return ret.Value != null ? new[] { ret.Value } : Array.Empty<IRValue>();
+                case IRConditionalBranch br:
+                    return new[] { br.Condition };
+                case IRSwitch sw:
+                    return new[] { sw.Value };
+                case IRGetElementPtr gep:
+                    var ops = new List<IRValue> { gep.BasePointer };
+                    ops.AddRange(gep.Indices);
+                    return ops;
+                case IRPhi phi:
+                    return phi.Operands.Select(i => i.Value).ToList();
+                default:
+                    return Array.Empty<IRValue>();
+            }
         }
 
         // ====================================================================
@@ -377,86 +834,107 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRBinaryOp binaryOp)
         {
-            var left = GetValueName(binaryOp.Left);
-            var right = GetValueName(binaryOp.Right);
-            var op = MapBinaryOperator(binaryOp.Operation);
-            var result = GetValueName(binaryOp);
+            if (!IsNamedDestination(binaryOp))
+                return;
 
-            WriteLine($"{result} = {left} {op} {right};");
+            var left = EmitExpression(binaryOp.Left);
+            var right = EmitExpression(binaryOp.Right);
+            var op = MapBinaryOperator(binaryOp.Operation);
+
+            var target = GetValueName(binaryOp);
+            WriteLine($"{target} = {left} {op} {right};");
         }
 
         public void Visit(IRUnaryOp unaryOp)
         {
-            var operand = GetValueName(unaryOp.Operand);
-            var op = MapUnaryOperator(unaryOp.Operation);
-            var result = GetValueName(unaryOp);
+            if (!IsNamedDestination(unaryOp))
+                return;
 
-            if (unaryOp.Operation == UnaryOpKind.Inc || unaryOp.Operation == UnaryOpKind.Dec)
-            {
-                WriteLine($"{result} = {operand};");
-                WriteLine($"{result}{op};");
-            }
-            else
-            {
-                WriteLine($"{result} = {op}{operand};");
-            }
+            var operand = EmitExpression(unaryOp.Operand);
+            var op = MapUnaryOperator(unaryOp.Operation);
+
+            var target = GetValueName(unaryOp);
+            WriteLine($"{target} = {op}{operand};");
         }
 
         public void Visit(IRCompare compare)
         {
-            var left = GetValueName(compare.Left);
-            var right = GetValueName(compare.Right);
-            var op = MapCompareOperator(compare.Comparison);
-            var result = GetValueName(compare);
+            if (!IsNamedDestination(compare))
+                return;
 
-            WriteLine($"{result} = {left} {op} {right};");
+            var left = EmitExpression(compare.Left);
+            var right = EmitExpression(compare.Right);
+            var op = MapCompareOperator(compare.Comparison);
+
+            var target = GetValueName(compare);
+            WriteLine($"{target} = {left} {op} {right};");
         }
 
         public void Visit(IRAssignment assignment)
         {
-            var value = GetValueName(assignment.Value);
+            var value = EmitExpression(assignment.Value);
             var target = GetValueName(assignment.Target);
-
             WriteLine($"{target} = {value};");
         }
 
         public void Visit(IRLoad load)
         {
-            var address = GetValueName(load.Address);
-            var result = GetValueName(load);
+            if (!IsNamedDestination(load))
+                return;
 
-            WriteLine($"{result} = {address};");
+            var address = EmitExpression(load.Address);
+            var target = GetValueName(load);
+            WriteLine($"{target} = {address};");
         }
 
         public void Visit(IRStore store)
         {
-            var value = GetValueName(store.Value);
-            var address = GetValueName(store.Address);
+            var value = EmitExpression(store.Value);
 
+            // Array element store
+            if (store.Address is IRGetElementPtr gep)
+            {
+                var baseExpr = EmitExpression(gep.BasePointer);
+                var indices = string.Join(", ", gep.Indices.Select(EmitExpression));
+                WriteLine($"{baseExpr}[{indices}] = {value};");
+                return;
+            }
+
+            var address = EmitExpression(store.Address);
             WriteLine($"{address} = {value};");
         }
 
         public void Visit(IRCall call)
         {
-            var args = string.Join(", ", call.Arguments.Select(GetValueName));
+            var args = string.Join(", ", call.Arguments.Select(EmitExpression));
             var functionName = SanitizeName(call.FunctionName);
 
-            if (call.Type != null && call.Type.Name != "Void" && !string.IsNullOrEmpty(call.Name))
+            var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+            // If this call is explicitly targeted at a declared variable, emit assignment.
+            if (hasReturn && IsNamedDestination(call))
             {
-                var result = GetValueName(call);
-                WriteLine($"{result} = {functionName}({args});");
+                var target = GetValueName(call);
+                WriteLine($"{target} = {functionName}({args});");
+                return;
             }
-            else
+
+            // Otherwise emit as statement when result unused / void
+            if (!hasReturn || GetUseCount(call) == 0)
             {
                 WriteLine($"{functionName}({args});");
+                return;
             }
+
+            // If we got here, this call should have been inlined by EmitExpression.
+            // Do nothing to avoid creating temps.
         }
 
         public void Visit(IRReturn ret)
         {
             if (ret.Value != null)
             {
-                var value = GetValueName(ret.Value);
+                var value = EmitExpression(ret.Value);
                 WriteLine($"return {value};");
             }
             else
@@ -467,30 +945,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRBranch branch)
         {
-            WriteLine($"goto {branch.Target.Name};");
+            // Handled structurally in GenerateStructuredBlock - no direct goto emission
         }
 
         public void Visit(IRConditionalBranch condBranch)
         {
-            var condition = GetValueName(condBranch.Condition);
-
-            WriteLine($"if ({condition})");
-            WriteLine("{");
-            Indent();
-            WriteLine($"goto {condBranch.TrueTarget.Name};");
-            Unindent();
-            WriteLine("}");
-            WriteLine("else");
-            WriteLine("{");
-            Indent();
-            WriteLine($"goto {condBranch.FalseTarget.Name};");
-            Unindent();
-            WriteLine("}");
+            // Handled structurally in HandleConditionalBranch - no direct goto emission
         }
 
         public void Visit(IRSwitch switchInst)
         {
-            var value = GetValueName(switchInst.Value);
+            var value = EmitExpression(switchInst.Value);
 
             WriteLine($"switch ({value})");
             WriteLine("{");
@@ -498,8 +963,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             foreach (var (caseValue, target) in switchInst.Cases)
             {
-                var caseVal = GetValueName(caseValue);
-                WriteLine($"case {caseVal}: goto {target.Name};");
+                // Case labels must be compile-time constants in C#. We still stringify defensively.
+                var caseExpr = EmitExpression(caseValue);
+                WriteLine($"case {caseExpr}: goto {target.Name};");
             }
 
             WriteLine($"default: goto {switchInst.DefaultTarget.Name};");
@@ -510,38 +976,37 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRPhi phi)
         {
+            // Phi nodes are SSA merge artifacts; in imperative C# emission they should be lowered earlier.
             WriteLine($"// Phi node: {phi.Name}");
         }
 
         public void Visit(IRAlloca alloca)
         {
-            // Handled in temporary declarations
+            // No-op for C# (locals are declared from LocalVariables; arrays are references already)
         }
 
         public void Visit(IRGetElementPtr gep)
         {
-            var basePtr = GetValueName(gep.BasePointer);
-            var result = GetValueName(gep);
+            if (!IsNamedDestination(gep))
+                return;
 
-            if (gep.Indices.Count == 1)
-            {
-                var index = GetValueName(gep.Indices[0]);
-                WriteLine($"{result} = {basePtr}[{index}];");
-            }
-            else
-            {
-                var indices = string.Join(", ", gep.Indices.Select(GetValueName));
-                WriteLine($"{result} = {basePtr}[{indices}];");
-            }
+            var baseExpr = EmitExpression(gep.BasePointer);
+            var indices = string.Join(", ", gep.Indices.Select(EmitExpression));
+            var target = GetValueName(gep);
+
+            WriteLine($"{target} = {baseExpr}[{indices}];");
         }
 
         public void Visit(IRCast cast)
         {
-            var value = GetValueName(cast.Value);
-            var targetType = MapType(cast.Type);
-            var result = GetValueName(cast);
+            if (!IsNamedDestination(cast))
+                return;
 
-            WriteLine($"{result} = ({targetType}){value};");
+            var value = EmitExpression(cast.Value);
+            var targetType = MapType(cast.Type);
+            var target = GetValueName(cast);
+
+            WriteLine($"{target} = ({targetType}){value};");
         }
 
         public void Visit(IRLabel label)
@@ -554,9 +1019,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         public void Visit(IRComment comment)
         {
             if (_options.GenerateComments)
-            {
                 WriteLine($"// {comment.Text}");
-            }
         }
 
         // ====================================================================
@@ -589,9 +1052,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return "object";
 
             if (_typeMap.TryGetValue(type.Name, out var csharpType))
-            {
                 return csharpType;
-            }
 
             if (type.Kind == TypeKind.Array && type.ElementType != null)
             {
@@ -609,6 +1070,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             BinaryOpKind.Mul => "*",
             BinaryOpKind.Div => "/",
             BinaryOpKind.Mod => "%",
+            BinaryOpKind.IntDiv => "/",
             BinaryOpKind.And => "&",
             BinaryOpKind.Or => "|",
             BinaryOpKind.Xor => "^",
@@ -649,22 +1111,16 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             foreach (var ch in name)
             {
                 if (char.IsLetterOrDigit(ch) || ch == '_')
-                {
                     sanitized.Append(ch);
-                }
             }
 
             var result = sanitized.ToString();
 
             if (result.Length > 0 && char.IsDigit(result[0]))
-            {
                 result = "_" + result;
-            }
 
             if (IsCSharpKeyword(result))
-            {
                 result = "@" + result;
-            }
 
             return result.Length > 0 ? result : "_unnamed";
         }
@@ -680,7 +1136,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 "try", "void", "while"
             };
 
-            return keywords.Contains(name.ToLower());
+            return keywords.Contains((name ?? "").ToLowerInvariant());
         }
 
         private string EscapeString(string str)
@@ -702,10 +1158,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             return ch.ToString();
         }
 
-        private void Write(string text)
-        {
-            _output.Append(text);
-        }
+        private void Write(string text) => _output.Append(text);
 
         private void WriteLine(string text = "")
         {
@@ -720,15 +1173,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
         }
 
-        private void Indent()
-        {
-            _indentLevel++;
-        }
-
-        private void Unindent()
-        {
-            if (_indentLevel > 0)
-                _indentLevel--;
-        }
+        private void Indent() => _indentLevel++;
+        private void Unindent() => _indentLevel = Math.Max(0, _indentLevel - 1);
     }
 }

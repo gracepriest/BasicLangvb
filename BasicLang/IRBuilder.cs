@@ -28,9 +28,8 @@ namespace BasicLang.Compiler.IR
         {
             _semanticAnalyzer = semanticAnalyzer;
             _loopStack = new Stack<LoopContext>();
-            // Use case-insensitive comparison for BasicLang compatibility
-            _variableVersions = new Dictionary<string, Stack<IRVariable>>(StringComparer.OrdinalIgnoreCase);
-            _globalVariables = new Dictionary<string, IRVariable>(StringComparer.OrdinalIgnoreCase);
+            _variableVersions = new Dictionary<string, Stack<IRVariable>>();
+            _globalVariables = new Dictionary<string, IRVariable>();
         }
 
         /// <summary>
@@ -54,19 +53,19 @@ namespace BasicLang.Compiler.IR
 
         private IRVariable GetOrCreateVariable(string name, TypeInfo type)
         {
-            // Check for existing version (case-insensitive)
-            if (_variableVersions.TryGetValue(name, out var stack) && stack.Count > 0)
+            // Check for existing version
+            if (_variableVersions.ContainsKey(name) && _variableVersions[name].Count > 0)
             {
-                return stack.Peek();
+                return _variableVersions[name].Peek();
             }
 
             // Check global
-            if (_globalVariables.TryGetValue(name, out var globalVar))
+            if (_globalVariables.ContainsKey(name))
             {
-                return globalVar;
+                return _globalVariables[name];
             }
 
-            // Create new version (implicit variable declaration)
+            // Create new version
             var variable = CreateVariable(name, type, _nextVersion++);
 
             if (!_variableVersions.ContainsKey(name))
@@ -75,13 +74,6 @@ namespace BasicLang.Compiler.IR
             }
 
             _variableVersions[name].Push(variable);
-
-            // Also add to LocalVariables for implicit declarations
-            if (_currentFunction != null && !_currentFunction.LocalVariables.Any(v =>
-                string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase)))
-            {
-                _currentFunction.LocalVariables.Add(variable);
-            }
 
             return variable;
         }

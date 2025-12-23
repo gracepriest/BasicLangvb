@@ -1114,7 +1114,9 @@ namespace BasicLang.Compiler
 
         private StatementNode ParseAssignmentOrExpressionStatement()
         {
-            var expr = ParseExpression();
+            // Parse the left-hand side WITHOUT treating '=' as equality
+            // This is the assignment target or the start of an expression
+            var target = ParseAssignmentTarget();
 
             // Check for assignment operators
             if (Check(TokenType.Assignment) || Check(TokenType.PlusAssign) ||
@@ -1123,16 +1125,90 @@ namespace BasicLang.Compiler
             {
                 var token = Advance();
                 var assignment = new AssignmentStatementNode(token.Line, token.Column);
-                assignment.Target = expr;
+                assignment.Target = target;
                 assignment.Operator = token.Lexeme;
                 assignment.Value = ParseExpression();
                 return assignment;
             }
 
+            // Not an assignment - continue parsing as a full expression
+            // The target we parsed is just the start of the expression
+            var expr = ParseExpressionContinuation(target);
+
             // Expression statement
             var exprStmt = new ExpressionStatementNode(expr.Line, expr.Column);
             exprStmt.Expression = expr;
             return exprStmt;
+        }
+
+        /// <summary>
+        /// Parse a potential assignment target: identifier, member access, or array access.
+        /// Does NOT consume '=' as equality.
+        /// </summary>
+        private ExpressionNode ParseAssignmentTarget()
+        {
+            return ParsePostfix();
+        }
+
+        /// <summary>
+        /// Continue parsing an expression given an already-parsed left side.
+        /// Used when we determined something is NOT an assignment.
+        /// </summary>
+        private ExpressionNode ParseExpressionContinuation(ExpressionNode left)
+        {
+            // Continue with binary operators if present
+            return ParseBinaryExpressionContinuation(left, 0);
+        }
+
+        private ExpressionNode ParseBinaryExpressionContinuation(ExpressionNode left, int minPrecedence)
+        {
+            while (IsBinaryOperator(Peek()) && GetPrecedence(Peek()) >= minPrecedence)
+            {
+                var op = Advance();
+                int prec = GetPrecedence(op);
+                var right = ParseUnary();
+
+                while (IsBinaryOperator(Peek()) && GetPrecedence(Peek()) > prec)
+                {
+                    right = ParseBinaryExpressionContinuation(right, GetPrecedence(Peek()));
+                }
+
+                var binary = new BinaryExpressionNode(op.Line, op.Column);
+                binary.Left = left;
+                binary.Operator = op.Lexeme;
+                binary.Right = right;
+                left = binary;
+            }
+            return left;
+        }
+
+        private bool IsBinaryOperator(Token token)
+        {
+            return token.Type switch
+            {
+                TokenType.Plus or TokenType.Minus or TokenType.Multiply or TokenType.Divide or
+                TokenType.Modulo or TokenType.And or TokenType.Or or TokenType.BitwiseXor or
+                TokenType.AndAnd or TokenType.OrOr or TokenType.Assignment or
+                TokenType.Equal or TokenType.NotEqual or TokenType.LessThan or
+                TokenType.LessThanOrEqual or TokenType.GreaterThan or TokenType.GreaterThanOrEqual => true,
+                _ => false
+            };
+        }
+
+        private int GetPrecedence(Token token)
+        {
+            return token.Type switch
+            {
+                TokenType.OrOr or TokenType.Or => 1,
+                TokenType.AndAnd or TokenType.And => 2,
+                TokenType.Assignment or TokenType.Equal or TokenType.NotEqual => 3,
+                TokenType.LessThan or TokenType.LessThanOrEqual or
+                TokenType.GreaterThan or TokenType.GreaterThanOrEqual => 4,
+                TokenType.Plus or TokenType.Minus => 5,
+                TokenType.Multiply or TokenType.Divide or TokenType.Modulo => 6,
+                TokenType.BitwiseXor => 7,
+                _ => 0
+            };
         }
 
         // ====================================================================

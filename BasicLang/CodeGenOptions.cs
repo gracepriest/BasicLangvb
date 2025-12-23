@@ -48,6 +48,11 @@ namespace BasicLang.Compiler.CodeGen
         public bool UseTabs { get; set; } = false;
         
         /// <summary>
+        /// <summary>
+        /// Whether to inline IR temporaries into expressions (reduces t0/t1 style temps)
+        /// </summary>
+        public bool InlineTemporaries { get; set; } = true;
+
         /// Whether to generate XML documentation comments
         /// </summary>
         public bool GenerateXmlDocs { get; set; } = false;
