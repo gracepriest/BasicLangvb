@@ -662,6 +662,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine($"{type} {fieldAccess.Name} = {obj}.{fieldName};");
         }
 
+        public override void Visit(IRFieldStore fieldStore)
+        {
+            var obj = GetValueName(fieldStore.Object);
+            var fieldName = SanitizeName(fieldStore.FieldName);
+            var value = GetValueName(fieldStore.Value);
+            WriteLine($"{obj}.{fieldName} = {value};");
+        }
+
         #endregion
         
         private string MapBinaryOperator(BinaryOpKind op) => op switch

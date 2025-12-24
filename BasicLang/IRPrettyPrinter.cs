@@ -260,6 +260,11 @@ namespace BasicLang.Compiler.IR
         {
             WriteLine(fieldAccess.ToString());
         }
+
+        public void Visit(IRFieldStore fieldStore)
+        {
+            WriteLine(fieldStore.ToString());
+        }
     }
 
     /// <summary>

@@ -57,6 +57,7 @@ namespace BasicLang.Compiler.IR
         void Visit(IRInstanceMethodCall methodCall);
         void Visit(IRBaseMethodCall baseCall);
         void Visit(IRFieldAccess fieldAccess);
+        void Visit(IRFieldStore fieldStore);
     }
     
     // ============================================================================
@@ -705,6 +706,8 @@ namespace BasicLang.Compiler.IR
         public List<string> GenericParameters { get; set; }
         public bool IsAsync { get; set; }
         public bool IsIterator { get; set; }
+        public bool IsExtension { get; set; }
+        public string ExtendedType { get; set; }
 
         private int _nextBlockId = 0;
         private int _nextTempId = 0;
@@ -762,6 +765,10 @@ namespace BasicLang.Compiler.IR
         public Dictionary<string, TypeInfo> Types { get; set; }
         public Dictionary<string, IRExternDeclaration> ExternDeclarations { get; set; }
         public Dictionary<string, IRClass> Classes { get; set; }
+        public Dictionary<string, IRInterface> Interfaces { get; set; }
+        public Dictionary<string, IREnum> Enums { get; set; }
+        public Dictionary<string, IRDelegate> Delegates { get; set; }
+        public List<string> Namespaces { get; set; }
 
         public IRModule(string name)
         {
@@ -771,6 +778,10 @@ namespace BasicLang.Compiler.IR
             Types = new Dictionary<string, TypeInfo>();
             ExternDeclarations = new Dictionary<string, IRExternDeclaration>(StringComparer.OrdinalIgnoreCase);
             Classes = new Dictionary<string, IRClass>(StringComparer.OrdinalIgnoreCase);
+            Interfaces = new Dictionary<string, IRInterface>(StringComparer.OrdinalIgnoreCase);
+            Enums = new Dictionary<string, IREnum>(StringComparer.OrdinalIgnoreCase);
+            Delegates = new Dictionary<string, IRDelegate>(StringComparer.OrdinalIgnoreCase);
+            Namespaces = new List<string>();
         }
 
         public IRFunction CreateFunction(string name, TypeInfo returnType)
@@ -852,17 +863,119 @@ namespace BasicLang.Compiler.IR
     }
 
     /// <summary>
+    /// Represents an interface definition in IR
+    /// </summary>
+    public class IRInterface
+    {
+        public string Name { get; set; }
+        public string Namespace { get; set; }
+        public List<IRInterfaceMethod> Methods { get; set; }
+        public List<IRInterfaceProperty> Properties { get; set; }
+        public List<string> BaseInterfaces { get; set; }
+
+        public IRInterface(string name)
+        {
+            Name = name;
+            Methods = new List<IRInterfaceMethod>();
+            Properties = new List<IRInterfaceProperty>();
+            BaseInterfaces = new List<string>();
+        }
+    }
+
+    /// <summary>
+    /// Represents a method signature in an interface
+    /// </summary>
+    public class IRInterfaceMethod
+    {
+        public string Name { get; set; }
+        public TypeInfo ReturnType { get; set; }
+        public List<IRParameter> Parameters { get; set; }
+
+        public IRInterfaceMethod()
+        {
+            Parameters = new List<IRParameter>();
+        }
+    }
+
+    /// <summary>
+    /// Represents a property signature in an interface
+    /// </summary>
+    public class IRInterfaceProperty
+    {
+        public string Name { get; set; }
+        public TypeInfo Type { get; set; }
+        public bool HasGetter { get; set; }
+        public bool HasSetter { get; set; }
+    }
+
+    /// <summary>
+    /// Represents an enum definition in IR
+    /// </summary>
+    public class IREnum
+    {
+        public string Name { get; set; }
+        public string Namespace { get; set; }
+        public TypeInfo UnderlyingType { get; set; }
+        public List<IREnumMember> Members { get; set; }
+
+        public IREnum(string name)
+        {
+            Name = name;
+            Members = new List<IREnumMember>();
+        }
+    }
+
+    /// <summary>
+    /// Represents an enum member
+    /// </summary>
+    public class IREnumMember
+    {
+        public string Name { get; set; }
+        public object Value { get; set; }
+    }
+
+    /// <summary>
+    /// Represents a delegate definition in IR
+    /// </summary>
+    public class IRDelegate
+    {
+        public string Name { get; set; }
+        public string Namespace { get; set; }
+        public TypeInfo ReturnType { get; set; }
+        public List<IRParameter> Parameters { get; set; }
+
+        public IRDelegate(string name)
+        {
+            Name = name;
+            Parameters = new List<IRParameter>();
+        }
+    }
+
+    /// <summary>
+    /// Represents an event definition in IR
+    /// </summary>
+    public class IREvent
+    {
+        public string Name { get; set; }
+        public AccessModifier Access { get; set; }
+        public string DelegateType { get; set; }
+        public bool IsStatic { get; set; }
+    }
+
+    /// <summary>
     /// Represents a class definition in IR
     /// </summary>
     public class IRClass
     {
         public string Name { get; set; }
+        public string Namespace { get; set; }
         public string BaseClass { get; set; }
         public List<string> Interfaces { get; set; }
         public List<IRField> Fields { get; set; }
         public List<IRMethod> Methods { get; set; }
         public List<IRProperty> Properties { get; set; }
         public List<IRConstructor> Constructors { get; set; }
+        public List<IREvent> Events { get; set; }
         public List<string> GenericParameters { get; set; }
 
         public IRClass(string name)
@@ -873,6 +986,7 @@ namespace BasicLang.Compiler.IR
             Methods = new List<IRMethod>();
             Properties = new List<IRProperty>();
             Constructors = new List<IRConstructor>();
+            Events = new List<IREvent>();
             GenericParameters = new List<string>();
         }
     }
@@ -1031,6 +1145,26 @@ namespace BasicLang.Compiler.IR
 
         public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
         public override string ToString() => $"{Name} = {Object.Name}.{FieldName}";
+    }
+
+    /// <summary>
+    /// Represents a field store operation: obj.Field = value
+    /// </summary>
+    public class IRFieldStore : IRInstruction
+    {
+        public IRValue Object { get; set; }
+        public string FieldName { get; set; }
+        public IRValue Value { get; set; }
+
+        public IRFieldStore(IRValue obj, string fieldName, IRValue value)
+        {
+            Object = obj;
+            FieldName = fieldName;
+            Value = value;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+        public override string ToString() => $"{Object.Name}.{FieldName} = {Value.Name}";
     }
 
     /// <summary>

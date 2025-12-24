@@ -33,6 +33,8 @@ namespace BasicLang.Compiler.AST
         void Visit(StructureNode node);
         void Visit(TypeNode node);
         void Visit(InterfaceNode node);
+        void Visit(EnumNode node);
+        void Visit(EnumMemberNode node);
         void Visit(ModuleNode node);
         void Visit(NamespaceNode node);
         void Visit(VariableDeclarationNode node);
@@ -88,6 +90,7 @@ namespace BasicLang.Compiler.AST
         void Visit(ComparisonPatternNode node);
         void Visit(AwaitExpressionNode node);
         void Visit(YieldStatementNode node);
+        void Visit(LinqQueryExpressionNode node);
     }
     
     // ============================================================================
@@ -251,15 +254,45 @@ namespace BasicLang.Compiler.AST
     {
         public string Name { get; set; }
         public List<FunctionNode> Methods { get; set; }
-        
+        public List<PropertyNode> Properties { get; set; }
+        public List<string> BaseInterfaces { get; set; }
+
         public InterfaceNode(int line, int column) : base(line, column)
         {
             Methods = new List<FunctionNode>();
+            Properties = new List<PropertyNode>();
+            BaseInterfaces = new List<string>();
         }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
-    
+
+    public class EnumNode : ASTNode
+    {
+        public string Name { get; set; }
+        public AccessModifier Access { get; set; }
+        public TypeReference UnderlyingType { get; set; }
+        public List<EnumMemberNode> Members { get; set; }
+
+        public EnumNode(int line, int column) : base(line, column)
+        {
+            Access = AccessModifier.Public;
+            Members = new List<EnumMemberNode>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    public class EnumMemberNode : ASTNode
+    {
+        public string Name { get; set; }
+        public ExpressionNode Value { get; set; }
+
+        public EnumMemberNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
     // ============================================================================
     // Modules and Namespaces
     // ============================================================================
@@ -554,6 +587,79 @@ namespace BasicLang.Compiler.AST
         public ExtensionMethodNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    // ============================================================================
+    // LINQ Query Expressions
+    // ============================================================================
+
+    /// <summary>
+    /// Represents a LINQ query expression: From x In collection Where x > 0 Select x
+    /// </summary>
+    public class LinqQueryExpressionNode : ExpressionNode
+    {
+        public List<LinqClause> Clauses { get; set; }
+
+        public LinqQueryExpressionNode(int line, int column) : base(line, column)
+        {
+            Clauses = new List<LinqClause>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    public abstract class LinqClause
+    {
+        public int Line { get; set; }
+        public int Column { get; set; }
+    }
+
+    public class FromClause : LinqClause
+    {
+        public string VariableName { get; set; }
+        public ExpressionNode Collection { get; set; }
+    }
+
+    public class WhereClause : LinqClause
+    {
+        public ExpressionNode Condition { get; set; }
+    }
+
+    public class SelectClause : LinqClause
+    {
+        public ExpressionNode Selector { get; set; }
+    }
+
+    public class OrderByClause : LinqClause
+    {
+        public ExpressionNode KeySelector { get; set; }
+        public bool Descending { get; set; }
+    }
+
+    public class GroupByClause : LinqClause
+    {
+        public ExpressionNode KeySelector { get; set; }
+        public ExpressionNode ElementSelector { get; set; }
+    }
+
+    public class LetClause : LinqClause
+    {
+        public string VariableName { get; set; }
+        public ExpressionNode Value { get; set; }
+    }
+
+    public class TakeClause : LinqClause
+    {
+        public ExpressionNode Count { get; set; }
+    }
+
+    public class SkipClause : LinqClause
+    {
+        public ExpressionNode Count { get; set; }
+    }
+
+    public class DistinctClause : LinqClause
+    {
     }
 
     /// <summary>
@@ -1013,12 +1119,14 @@ namespace BasicLang.Compiler.AST
     {
         public ExpressionNode Callee { get; set; }
         public List<ExpressionNode> Arguments { get; set; }
-        
+        public List<TypeReference> GenericArguments { get; set; }
+
         public CallExpressionNode(int line, int column) : base(line, column)
         {
             Arguments = new List<ExpressionNode>();
+            GenericArguments = new List<TypeReference>();
         }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     

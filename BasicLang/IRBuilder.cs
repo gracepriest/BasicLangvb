@@ -20,6 +20,7 @@ namespace BasicLang.Compiler.IR
         private readonly Dictionary<string, IRVariable> _globalVariables;
         private readonly Dictionary<string, IRAlloca> _locals;
         private string _currentClassName;
+        private string _currentNamespace;
         private List<IRValue> _pendingBaseConstructorArgs;  // Temporary storage for base constructor args
 
         // For SSA construction
@@ -121,11 +122,28 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(NamespaceNode node)
         {
-            // Namespaces are organizational - process members
+            // Save current namespace
+            var savedNamespace = _currentNamespace;
+
+            // Set current namespace (support nested namespaces)
+            _currentNamespace = _currentNamespace != null
+                ? $"{_currentNamespace}.{node.Name}"
+                : node.Name;
+
+            // Track namespace in module
+            if (!_module.Namespaces.Contains(_currentNamespace))
+            {
+                _module.Namespaces.Add(_currentNamespace);
+            }
+
+            // Process members
             foreach (var member in node.Members)
             {
                 member.Accept(this);
             }
+
+            // Restore namespace
+            _currentNamespace = savedNamespace;
         }
 
         public void Visit(ModuleNode node)
@@ -270,7 +288,7 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(VariableDeclarationNode node)
         {
-            var varType = _semanticAnalyzer.GetNodeType(node);
+            var varType = _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Object", TypeKind.Class);
 
             if (_currentFunction == null)
             {
@@ -371,7 +389,8 @@ namespace BasicLang.Compiler.IR
             // Create IR class structure
             var irClass = new IRClass(node.Name)
             {
-                BaseClass = node.BaseClass
+                BaseClass = node.BaseClass,
+                Namespace = _currentNamespace
             };
 
             // Copy generic parameters
@@ -508,7 +527,93 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(InterfaceNode node)
         {
-            // Interfaces don't generate IR directly
+            var irInterface = new IRInterface(node.Name)
+            {
+                Namespace = _currentNamespace
+            };
+
+            foreach (var method in node.Methods)
+            {
+                var irMethod = new IRInterfaceMethod
+                {
+                    Name = method.Name,
+                    ReturnType = new TypeInfo(method.ReturnType?.Name ?? "Void", TypeKind.Primitive)
+                };
+
+                foreach (var param in method.Parameters)
+                {
+                    irMethod.Parameters.Add(new IRParameter
+                    {
+                        Name = param.Name,
+                        TypeName = param.Type?.Name ?? "Object"
+                    });
+                }
+
+                irInterface.Methods.Add(irMethod);
+            }
+
+            foreach (var prop in node.Properties)
+            {
+                irInterface.Properties.Add(new IRInterfaceProperty
+                {
+                    Name = prop.Name,
+                    Type = new TypeInfo(prop.PropertyType?.Name ?? "Object", TypeKind.Class),
+                    HasGetter = prop.Getter != null,
+                    HasSetter = prop.Setter != null
+                });
+            }
+
+            _module.Interfaces[node.Name] = irInterface;
+        }
+
+        public void Visit(EnumNode node)
+        {
+            var irEnum = new IREnum(node.Name)
+            {
+                Namespace = _currentNamespace,
+                UnderlyingType = node.UnderlyingType != null
+                    ? new TypeInfo(node.UnderlyingType.Name, TypeKind.Primitive)
+                    : new TypeInfo("Int32", TypeKind.Primitive)
+            };
+
+            long nextValue = 0;
+            foreach (var member in node.Members)
+            {
+                var irMember = new IREnumMember { Name = member.Name };
+
+                // If member has explicit value, try to evaluate it
+                if (member.Value != null)
+                {
+                    member.Value.Accept(this);
+                    if (_expressionResult is IRConstant constant && constant.Value is long lval)
+                    {
+                        irMember.Value = lval;
+                        nextValue = lval + 1;
+                    }
+                    else if (_expressionResult is IRConstant constant2 && constant2.Value is int ival)
+                    {
+                        irMember.Value = (long)ival;
+                        nextValue = ival + 1;
+                    }
+                    else
+                    {
+                        irMember.Value = nextValue++;
+                    }
+                }
+                else
+                {
+                    irMember.Value = nextValue++;
+                }
+
+                irEnum.Members.Add(irMember);
+            }
+
+            _module.Enums[node.Name] = irEnum;
+        }
+
+        public void Visit(EnumMemberNode node)
+        {
+            // Enum members are processed in EnumNode visitor
         }
 
         public void Visit(TypeNode node)
@@ -532,15 +637,40 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(DelegateDeclarationNode node)
         {
-            // Delegates are types, not executable code
+            var irDelegate = new IRDelegate(node.Name)
+            {
+                Namespace = _currentNamespace,
+                ReturnType = node.ReturnType != null
+                    ? new TypeInfo(node.ReturnType.Name, TypeKind.Primitive)
+                    : new TypeInfo("Void", TypeKind.Void)
+            };
+
+            foreach (var param in node.Parameters)
+            {
+                irDelegate.Parameters.Add(new IRParameter
+                {
+                    Name = param.Name,
+                    TypeName = param.Type?.Name ?? "Object"
+                });
+            }
+
+            _module.Delegates[node.Name] = irDelegate;
         }
 
         public void Visit(ExtensionMethodNode node)
         {
-            // Extension methods are regular functions
+            // Extension methods are regular functions with extension marker
             if (node.Method != null)
             {
                 node.Method.Accept(this);
+
+                // Mark the function as an extension method
+                var irFunc = _module.Functions.FirstOrDefault(f => f.Name == node.Method.Name);
+                if (irFunc != null)
+                {
+                    irFunc.IsExtension = true;
+                    irFunc.ExtendedType = node.ExtendedType;
+                }
             }
         }
 
@@ -815,15 +945,20 @@ namespace BasicLang.Compiler.IR
             var opMethodName = $"op_{GetOperatorMethodName(node.OperatorSymbol)}";
             var returnType = new TypeInfo(node.ReturnType?.Name ?? "Object", TypeKind.Class);
 
-            var opFunc = new IRFunction(opMethodName, returnType);
+            // Create the function with class-qualified name for the module
+            var funcName = _currentClassName != null
+                ? $"{_currentClassName}.{opMethodName}"
+                : opMethodName;
+            var opFunc = _module.CreateFunction(funcName, returnType);
             // Operators are always static (handled at code generation)
 
             // Add parameters
             foreach (var param in node.Parameters)
             {
                 var paramType = new TypeInfo(param.Type?.Name ?? "Object", TypeKind.Class);
-                var paramVar = new IRVariable(param.Name, paramType);
+                var paramVar = new IRVariable(param.Name, paramType) { IsParameter = true };
                 opFunc.Parameters.Add(paramVar);
+                PushVariableVersion(param.Name, paramVar);
             }
 
             // Save context and switch to operator function
@@ -832,7 +967,7 @@ namespace BasicLang.Compiler.IR
             var savedLocals = new Dictionary<string, IRAlloca>(_locals);
 
             _currentFunction = opFunc;
-            _currentBlock = opFunc.EntryBlock;
+            _currentBlock = opFunc.CreateBlock("entry");
             _locals.Clear();
 
             // Generate body
@@ -847,7 +982,27 @@ namespace BasicLang.Compiler.IR
                 EmitInstruction(new IRReturn(null));
             }
 
-            _module.Functions.Add(opFunc);
+            // Clean up parameter versions
+            foreach (var param in node.Parameters)
+            {
+                PopVariableVersion(param.Name);
+            }
+
+            // If inside a class, also add as an IRMethod
+            if (_currentClassName != null && _module.Classes.TryGetValue(_currentClassName, out var irClass))
+            {
+                var irMethod = new IRMethod
+                {
+                    Name = opMethodName,
+                    ReturnType = returnType,
+                    Access = MapAccessModifier(node.Access),
+                    IsStatic = true,  // Operators are always static
+                    IsVirtual = false,
+                    IsOverride = false,
+                    Implementation = opFunc
+                };
+                irClass.Methods.Add(irMethod);
+            }
 
             // Restore context
             _currentFunction = savedFunction;
@@ -890,9 +1045,18 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(EventDeclarationNode node)
         {
-            // Events are handled as fields with delegate type at code generation
-            // No IR needed - they're part of class metadata
-            EmitInstruction(new IRComment($"Event: {node.Name}"));
+            // Add event to the current class
+            if (_currentClassName != null && _module.Classes.TryGetValue(_currentClassName, out var irClass))
+            {
+                var irEvent = new IREvent
+                {
+                    Name = node.Name,
+                    Access = MapAccessModifier(node.Access),
+                    DelegateType = node.EventType?.Name ?? "EventHandler",
+                    IsStatic = false
+                };
+                irClass.Events.Add(irEvent);
+            }
         }
 
         public void Visit(RaiseEventStatementNode node)
@@ -1672,8 +1836,12 @@ namespace BasicLang.Compiler.IR
             }
             else if (node.Target is MemberAccessExpressionNode memberExpr)
             {
-                // Handle member assignment
-                EmitInstruction(new IRComment($"Store to member: {memberExpr.MemberName}"));
+                // Handle member assignment (both properties and fields use field store syntax in C#)
+                memberExpr.Object.Accept(this);
+                var obj = _expressionResult;
+
+                var fieldStore = new IRFieldStore(obj, memberExpr.MemberName, value);
+                EmitInstruction(fieldStore);
             }
             else if (node.Target is ArrayAccessExpressionNode arrayExpr)
             {

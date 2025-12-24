@@ -166,7 +166,25 @@ namespace BasicLang.Compiler
             }
             Unindent();
         }
-        
+
+        public void Visit(EnumNode node)
+        {
+            var underlyingType = node.UnderlyingType != null ? $" As {node.UnderlyingType.Name}" : "";
+            WriteLine($"Enum {node.Name}{underlyingType}");
+            Indent();
+            foreach (var member in node.Members)
+            {
+                member.Accept(this);
+            }
+            Unindent();
+        }
+
+        public void Visit(EnumMemberNode node)
+        {
+            var value = node.Value != null ? " = <expr>" : "";
+            WriteLine($"{node.Name}{value}");
+        }
+
         public void Visit(ModuleNode node)
         {
             WriteLine($"Module {node.Name}");

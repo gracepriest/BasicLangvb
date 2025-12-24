@@ -46,7 +46,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
             catch (Exception ex)
             {
-                _errors.Add(new SemanticError($"Internal error: {ex.Message}", 0, 0));
+                _errors.Add(new SemanticError($"Internal error: {ex.Message}\n{ex.StackTrace}", 0, 0));
                 return false;
             }
         }
@@ -410,6 +410,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     classType.Members[varDecl.Name] = varSymbol;
                 }
+                else if (member is PropertyNode prop && _nodeSymbols.TryGetValue(prop, out var propSymbol))
+                {
+                    classType.Members[prop.Name] = propSymbol;
+                }
             }
 
             ExitScope();
@@ -438,6 +442,46 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             ExitScope();
+        }
+
+        public void Visit(EnumNode node)
+        {
+            var enumType = _typeManager.DefineType(node.Name, TypeKind.Enum);
+            if (enumType == null)
+            {
+                Error($"Enum '{node.Name}' is already defined", node.Line, node.Column);
+                return;
+            }
+
+            var symbol = new Symbol(node.Name, SymbolKind.Type, enumType, node.Line, node.Column);
+            if (!_currentScope.Define(symbol))
+            {
+                Error($"Symbol '{node.Name}' is already defined in this scope", node.Line, node.Column);
+            }
+
+            // Define enum members as constants in current scope
+            foreach (var member in node.Members)
+            {
+                var memberSymbol = new Symbol(
+                    $"{node.Name}.{member.Name}",
+                    SymbolKind.Constant,
+                    enumType,
+                    member.Line,
+                    member.Column
+                );
+                _currentScope.Define(memberSymbol);
+
+                // If member has explicit value, analyze it
+                if (member.Value != null)
+                {
+                    member.Value.Accept(this);
+                }
+            }
+        }
+
+        public void Visit(EnumMemberNode node)
+        {
+            // Enum members are processed in EnumNode visitor
         }
 
         public void Visit(TypeNode node)
@@ -846,10 +890,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
+            // Default to Object type if not specified
+            propertyType = propertyType ?? new TypeInfo("Object", TypeKind.Class);
+
+            // Create a symbol for the property
+            var symbol = new Symbol(node.Name, SymbolKind.Property, propertyType, node.Line, node.Column);
+            symbol.Access = node.Access;
+
+            // Try to define in current scope
+            if (!_currentScope.Define(symbol))
+            {
+                Error($"Property '{node.Name}' is already defined in this scope", node.Line, node.Column);
+            }
+
+            SetNodeSymbol(node, symbol);
+            SetNodeType(node, propertyType);
+
             // Analyze getter
             if (node.Getter != null)
             {
-                EnterScope($"get_{node.Name}", ScopeKind.Function);
+                var getterScope = EnterScope($"get_{node.Name}", ScopeKind.Function);
+                getterScope.ReturnType = propertyType ?? new TypeInfo("Object", TypeKind.Class);
                 node.Getter.Accept(this);
                 ExitScope();
             }
@@ -857,7 +918,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Analyze setter
             if (node.Setter != null)
             {
-                EnterScope($"set_{node.Name}", ScopeKind.Function);
+                var setterScope = EnterScope($"set_{node.Name}", ScopeKind.Function);
+                setterScope.ReturnType = _typeManager.VoidType;
 
                 // Register setter parameter (value)
                 if (node.SetterParameter != null)
@@ -866,8 +928,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 else
                 {
-                    // Create implicit 'value' parameter
-                    var valueSymbol = new Symbol("value", SymbolKind.Parameter, propertyType, node.Line, node.Column);
+                    // Create implicit 'value' parameter with the property's type (or Object if unknown)
+                    var valueType = propertyType ?? new TypeInfo("Object", TypeKind.Class);
+                    var valueSymbol = new Symbol("value", SymbolKind.Parameter, valueType, node.Line, node.Column);
                     _currentScope.Define(valueSymbol);
                 }
 
@@ -1005,8 +1068,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 Warning("Operators must be Shared (static)", node.Line, node.Column);
             }
 
+            // Resolve the return type
+            var returnType = ResolveTypeReference(node.ReturnType);
+
             // Create a scope for the operator body
-            EnterScope($"Operator {node.OperatorSymbol}", ScopeKind.Function);
+            var operatorScope = EnterScope($"Operator {node.OperatorSymbol}", ScopeKind.Function);
+            operatorScope.ReturnType = returnType;
 
             // Register parameters
             foreach (var param in node.Parameters)

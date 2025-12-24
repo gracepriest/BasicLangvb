@@ -1235,6 +1235,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine($"    stloc {fieldAccess.Name}");
         }
 
+        public override void Visit(IRFieldStore fieldStore)
+        {
+            // Load object, load value, store to field
+            WriteLine($"    ldloc {fieldStore.Object?.Name}");
+            WriteLine($"    ldloc {fieldStore.Value?.Name}");
+            var fieldType = MapType(fieldStore.Value?.Type);
+            WriteLine($"    stfld {fieldType} {fieldStore.Object?.Type?.Name}::{fieldStore.FieldName}");
+        }
+
         #endregion
 
         private void WriteLine(string text = "")

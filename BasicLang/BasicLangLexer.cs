@@ -106,6 +106,8 @@ namespace BasicLang.Compiler
         Inherits,
         Interface,
         EndInterface,
+        Enum,
+        EndEnum,
         Implements,
         New,
         Me,
@@ -120,6 +122,9 @@ namespace BasicLang.Compiler
         EndSet,
         ReadOnly,
         WriteOnly,
+
+        // Keywords - Operator Overloading
+        EndOperator,
 
         // Keywords - OOP Modifiers
         Shared,          // Static
@@ -142,7 +147,28 @@ namespace BasicLang.Compiler
         
         // Keywords - Extensions
         Extension,
-        
+
+        // Keywords - LINQ
+        From,
+        Where,
+        OrderBy,
+        Ascending,
+        Descending,
+        GroupBy,
+        Join,
+        On,
+        Equals,
+        Into,
+        Let,
+        Aggregate,
+        Take,
+        Skip,
+        Distinct,
+        Any,
+        All,
+        First,
+        Last,
+
         // Keywords - Delegates and Events
         Delegate,
         Event,
@@ -357,6 +383,8 @@ namespace BasicLang.Compiler
             { "Inherits", TokenType.Inherits },
             { "Interface", TokenType.Interface },
             { "End Interface", TokenType.EndInterface },
+            { "Enum", TokenType.Enum },
+            { "End Enum", TokenType.EndEnum },
             { "Implements", TokenType.Implements },
             { "New", TokenType.New },
             { "Me", TokenType.Me },
@@ -372,13 +400,16 @@ namespace BasicLang.Compiler
             { "ReadOnly", TokenType.ReadOnly },
             { "WriteOnly", TokenType.WriteOnly },
 
+            // Operator Overloading
+            { "Operator", TokenType.Operator },
+            { "End Operator", TokenType.EndOperator },
+
             // OOP Modifiers
             { "Shared", TokenType.Shared },
             { "Overridable", TokenType.Overridable },
             { "Overrides", TokenType.Overrides },
             { "MustOverride", TokenType.MustOverride },
             { "NotOverridable", TokenType.NotOverridable },
-            { "Operator", TokenType.Operator },
             { "Widening", TokenType.Widening },
             { "Narrowing", TokenType.Narrowing },
 
@@ -393,7 +424,28 @@ namespace BasicLang.Compiler
             
             // Extensions
             { "Extension", TokenType.Extension },
-            
+
+            // LINQ
+            { "From", TokenType.From },
+            { "Where", TokenType.Where },
+            { "Order By", TokenType.OrderBy },
+            { "Ascending", TokenType.Ascending },
+            { "Descending", TokenType.Descending },
+            { "Group By", TokenType.GroupBy },
+            { "Join", TokenType.Join },
+            { "On", TokenType.On },
+            { "Equals", TokenType.Equals },
+            { "Into", TokenType.Into },
+            { "Let", TokenType.Let },
+            { "Aggregate", TokenType.Aggregate },
+            { "Take", TokenType.Take },
+            { "Skip", TokenType.Skip },
+            { "Distinct", TokenType.Distinct },
+            { "Any", TokenType.Any },
+            { "All", TokenType.All },
+            { "First", TokenType.First },
+            { "Last", TokenType.Last },
+
             // Delegates
             { "Delegate", TokenType.Delegate },
             { "Event", TokenType.Event },

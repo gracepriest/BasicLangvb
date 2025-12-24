@@ -29,7 +29,7 @@
     ldc.i4.1
     shl
     stloc.0
-    // WARNING: Cannot load value 't0 = mul %x, 2'
+    ldloc.0
     ret
   } // end of method Multiply2
 
@@ -44,10 +44,10 @@
     )
 
     ldarg.0
-    call int32 AddDoubled::Multiply2(int32)
+    call int32 DoubleSumDemo::Multiply2(int32)
     stloc.1
     ldarg.1
-    call int32 AddDoubled::Multiply2(int32)
+    call int32 DoubleSumDemo::Multiply2(int32)
     stloc.2
     ldloc.1
     ldloc.2
@@ -74,7 +74,7 @@
     stloc.1
     ldloc.0
     ldloc.1
-    call int32 Main::AddDoubled(int32, int32)
+    call int32 DoubleSumDemo::AddDoubled(int32, int32)
     stloc.2
     ldloc.2
     call void [mscorlib]System.Console::WriteLine(int32)

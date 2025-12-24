@@ -150,6 +150,7 @@ namespace BasicLang.Compiler.CodeGen
         public abstract void Visit(IRInstanceMethodCall methodCall);
         public abstract void Visit(IRBaseMethodCall baseCall);
         public abstract void Visit(IRFieldAccess fieldAccess);
+        public abstract void Visit(IRFieldStore fieldStore);
 
         /// <summary>
         /// Map IR type to target language type

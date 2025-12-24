@@ -68,6 +68,8 @@ namespace BasicLang.Compiler
                 return ParseClass();
             if (Check(TokenType.Interface))
                 return ParseInterface();
+            if (Check(TokenType.Enum))
+                return ParseEnum();
             if (Check(TokenType.Type))
                 return ParseType();
             if (Check(TokenType.Structure))
@@ -80,6 +82,8 @@ namespace BasicLang.Compiler
                 return ParseTypeDefine();
             if (Check(TokenType.Extern))
                 return ParseExtern();
+            if (Check(TokenType.Extension))
+                return ParseExtensionMethod();
             // Handle Async/Iterator modifiers for top-level functions/subs
             if (Check(TokenType.Async) || Check(TokenType.Iterator))
             {
@@ -378,6 +382,16 @@ namespace BasicLang.Compiler
                     Advance();
                     isIterator = true;
                 }
+                else if (Check(TokenType.Widening))
+                {
+                    Advance();
+                    isReadOnly = true;  // Reuse for Widening
+                }
+                else if (Check(TokenType.Narrowing))
+                {
+                    Advance();
+                    isWriteOnly = true;  // Reuse for Narrowing
+                }
                 else
                 {
                     break;
@@ -393,6 +407,24 @@ namespace BasicLang.Compiler
                 prop.IsReadOnly = isReadOnly;
                 prop.IsWriteOnly = isWriteOnly;
                 return prop;
+            }
+
+            // Event declaration
+            if (Check(TokenType.Event))
+            {
+                var evt = ParseEventDeclaration();
+                evt.Access = access;
+                return evt;
+            }
+
+            // Operator overload declaration
+            if (Check(TokenType.Operator))
+            {
+                var op = ParseOperatorDeclaration();
+                op.Access = access;
+                op.IsWidening = isReadOnly;   // Widening modifier reuses ReadOnly position
+                op.IsNarrowing = isWriteOnly; // Narrowing modifier reuses WriteOnly position
+                return op;
             }
 
             // Function declaration
@@ -440,18 +472,27 @@ namespace BasicLang.Compiler
                 return field;
             }
 
-            // Field declaration without Dim (e.g., "Private _name As String" or "Private items[10] As Integer")
-            // If we see an identifier followed by As or [ (array), it's a field
+            // Field declaration without Dim (e.g., "Private _name As String" or "Private items(10) As Integer")
+            // If we see an identifier followed by As or ( or [ (array), it's a field
             if (Check(TokenType.Identifier))
             {
                 var nextType = PeekNext().Type;
-                if (nextType == TokenType.As || nextType == TokenType.LeftBracket)
+                if (nextType == TokenType.As || nextType == TokenType.LeftBracket || nextType == TokenType.LeftParen)
                 {
                     var token = Peek();
                     var name = Advance().Value.ToString();
 
-                    // Parse array dimensions if present
+                    // Parse array dimensions if present (support both [] and () syntax)
                     var arrayDimensions = new List<int>();
+                    if (Match(TokenType.LeftParen))
+                    {
+                        // VB-style array: items(100)
+                        if (Check(TokenType.IntegerLiteral))
+                        {
+                            arrayDimensions.Add(int.Parse(Advance().Value.ToString()));
+                        }
+                        Consume(TokenType.RightParen, "Expected ')' after array dimension");
+                    }
                     while (Match(TokenType.LeftBracket))
                     {
                         if (Check(TokenType.IntegerLiteral))
@@ -591,6 +632,165 @@ namespace BasicLang.Compiler
             return node;
         }
 
+        private EventDeclarationNode ParseEventDeclaration()
+        {
+            var token = Consume(TokenType.Event, "Expected 'Event'");
+            var node = new EventDeclarationNode(token.Line, token.Column);
+
+            node.Name = Consume(TokenType.Identifier, "Expected event name").Lexeme;
+
+            // Event can have delegate type: Event Click As EventHandler
+            // Or inline signature: Event Click(sender As Object, args As String)
+            if (Match(TokenType.As))
+            {
+                node.EventType = ParseTypeReference();
+            }
+
+            return node;
+        }
+
+        private OperatorDeclarationNode ParseOperatorDeclaration()
+        {
+            var token = Consume(TokenType.Operator, "Expected 'Operator'");
+            var node = new OperatorDeclarationNode(token.Line, token.Column);
+            node.IsShared = true;  // Operators are always Shared/static
+
+            // Parse operator symbol: +, -, *, /, \, ^, &, Mod, Like, =, <>, <, >, <=, >=, And, Or, Xor, Not, IsTrue, IsFalse, CType
+            if (Check(TokenType.Plus))
+            {
+                Advance();
+                node.OperatorSymbol = "+";
+            }
+            else if (Check(TokenType.Minus))
+            {
+                Advance();
+                node.OperatorSymbol = "-";
+            }
+            else if (Check(TokenType.Multiply))
+            {
+                Advance();
+                node.OperatorSymbol = "*";
+            }
+            else if (Check(TokenType.Divide))
+            {
+                Advance();
+                node.OperatorSymbol = "/";
+            }
+            else if (Check(TokenType.IntegerDivide))
+            {
+                Advance();
+                node.OperatorSymbol = "\\";
+            }
+            else if (Check(TokenType.Caret))
+            {
+                Advance();
+                node.OperatorSymbol = "^";
+            }
+            else if (Check(TokenType.Concatenate))
+            {
+                Advance();
+                node.OperatorSymbol = "&";
+            }
+            else if (Check(TokenType.Modulo))
+            {
+                Advance();
+                node.OperatorSymbol = "Mod";
+            }
+            else if (Check(TokenType.Equal))
+            {
+                Advance();
+                node.OperatorSymbol = "=";
+            }
+            else if (Check(TokenType.NotEqual))
+            {
+                Advance();
+                node.OperatorSymbol = "<>";
+            }
+            else if (Check(TokenType.LessThan))
+            {
+                Advance();
+                node.OperatorSymbol = "<";
+            }
+            else if (Check(TokenType.GreaterThan))
+            {
+                Advance();
+                node.OperatorSymbol = ">";
+            }
+            else if (Check(TokenType.LessThanOrEqual))
+            {
+                Advance();
+                node.OperatorSymbol = "<=";
+            }
+            else if (Check(TokenType.GreaterThanOrEqual))
+            {
+                Advance();
+                node.OperatorSymbol = ">=";
+            }
+            else if (Check(TokenType.And))
+            {
+                Advance();
+                node.OperatorSymbol = "And";
+            }
+            else if (Check(TokenType.Or))
+            {
+                Advance();
+                node.OperatorSymbol = "Or";
+            }
+            else if (Check(TokenType.BitwiseXor))
+            {
+                Advance();
+                node.OperatorSymbol = "Xor";
+            }
+            else if (Check(TokenType.Not))
+            {
+                Advance();
+                node.OperatorSymbol = "Not";
+            }
+            else if (Check(TokenType.Identifier))
+            {
+                // Handle Xor, Like, CType, IsTrue, IsFalse as identifiers
+                var opName = Advance().Lexeme;
+                if (opName == "Xor" || opName == "Like" || opName == "CType" || opName == "IsTrue" || opName == "IsFalse")
+                {
+                    node.OperatorSymbol = opName;
+                }
+                else
+                {
+                    throw new ParseException($"Unknown operator: {opName}", token);
+                }
+            }
+            else
+            {
+                throw new ParseException($"Expected operator symbol after 'Operator'", Peek());
+            }
+
+            // Parse parameters
+            Consume(TokenType.LeftParen, "Expected '(' after operator");
+            if (!Check(TokenType.RightParen))
+            {
+                do
+                {
+                    var param = new ParameterNode(Peek().Line, Peek().Column);
+                    param.Name = Consume(TokenType.Identifier, "Expected parameter name").Lexeme;
+                    Consume(TokenType.As, "Expected 'As' after parameter name");
+                    param.Type = ParseTypeReference();
+                    node.Parameters.Add(param);
+                } while (Match(TokenType.Comma));
+            }
+            Consume(TokenType.RightParen, "Expected ')' after parameters");
+
+            // Parse return type
+            Consume(TokenType.As, "Expected 'As' after operator parameters");
+            node.ReturnType = ParseTypeReference();
+            ConsumeNewlines();
+
+            // Parse body
+            node.Body = ParseBlock(TokenType.EndOperator);
+            Consume(TokenType.EndOperator, "Expected 'End Operator'");
+
+            return node;
+        }
+
         private InterfaceNode ParseInterface()
         {
             var token = Consume(TokenType.Interface, "Expected 'Interface'");
@@ -668,6 +868,52 @@ namespace BasicLang.Compiler
 
             // Interface methods have no body
             ConsumeNewlines();
+            return node;
+        }
+
+        // ====================================================================
+        // Enums
+        // ====================================================================
+
+        private EnumNode ParseEnum()
+        {
+            var token = Consume(TokenType.Enum, "Expected 'Enum'");
+            var node = new EnumNode(token.Line, token.Column);
+
+            node.Name = Consume(TokenType.Identifier, "Expected enum name").Lexeme;
+
+            // Optional underlying type: Enum Color As Integer
+            if (Match(TokenType.As))
+            {
+                node.UnderlyingType = ParseTypeReference();
+            }
+
+            ConsumeNewlines();
+
+            // Parse enum members
+            long nextValue = 0;
+            while (!Check(TokenType.EndEnum) && !IsAtEnd())
+            {
+                SkipNewlines();
+                if (Check(TokenType.EndEnum)) break;
+
+                var memberToken = Consume(TokenType.Identifier, "Expected enum member name");
+                var member = new EnumMemberNode(memberToken.Line, memberToken.Column)
+                {
+                    Name = memberToken.Lexeme
+                };
+
+                // Optional explicit value: Red = 1
+                if (Match(TokenType.Assignment))
+                {
+                    member.Value = ParseExpression();
+                }
+
+                node.Members.Add(member);
+                SkipNewlines();
+            }
+
+            Consume(TokenType.EndEnum, "Expected 'End Enum'");
             return node;
         }
 
@@ -960,12 +1206,25 @@ namespace BasicLang.Compiler
 
             Consume(TokenType.Function, "Expected 'Function' after 'Extension'");
 
-            // Parse extended type (e.g., String.Reverse())
-            node.ExtendedType = Consume(TokenType.Identifier, "Expected type name").Lexeme;
-            Consume(TokenType.Dot, "Expected '.' after type name");
-
             var func = new FunctionNode(token.Line, token.Column);
-            func.Name = Consume(TokenType.Identifier, "Expected method name").Lexeme;
+
+            // Check for traditional syntax: Extension Function String.Reverse()
+            // vs simpler syntax: Extension Function IsNullOrEmpty(s As String)
+            var firstIdent = Consume(TokenType.Identifier, "Expected method name or type").Lexeme;
+
+            if (Check(TokenType.Dot))
+            {
+                // Traditional syntax: TypeName.MethodName
+                Advance(); // consume dot
+                node.ExtendedType = firstIdent;
+                func.Name = Consume(TokenType.Identifier, "Expected method name").Lexeme;
+            }
+            else
+            {
+                // Simpler syntax: MethodName(self As Type, ...)
+                // The extended type comes from the first parameter
+                func.Name = firstIdent;
+            }
 
             if (Match(TokenType.LeftParen))
             {
@@ -977,6 +1236,12 @@ namespace BasicLang.Compiler
                     } while (Match(TokenType.Comma));
                 }
                 Consume(TokenType.RightParen, "Expected ')' after parameters");
+            }
+
+            // For simpler syntax, the extended type is the first parameter's type
+            if (string.IsNullOrEmpty(node.ExtendedType) && func.Parameters.Count > 0)
+            {
+                node.ExtendedType = func.Parameters[0].Type?.Name ?? "Object";
             }
 
             if (Match(TokenType.As))
@@ -1410,6 +1675,12 @@ namespace BasicLang.Compiler
                 return ParseConstantDeclaration();
             if (Check(TokenType.Yield))
                 return ParseYieldStatement();
+            if (Check(TokenType.RaiseEvent))
+                return ParseRaiseEventStatement();
+            if (Check(TokenType.AddHandler))
+                return ParseAddHandlerStatement();
+            if (Check(TokenType.RemoveHandler))
+                return ParseRemoveHandlerStatement();
 
             // Assignment or expression statement
             return ParseAssignmentOrExpressionStatement();
@@ -1438,6 +1709,61 @@ namespace BasicLang.Compiler
                 // Yield value (without Return keyword)
                 node.Value = ParseExpression();
             }
+
+            return node;
+        }
+
+        private RaiseEventStatementNode ParseRaiseEventStatement()
+        {
+            var token = Consume(TokenType.RaiseEvent, "Expected 'RaiseEvent'");
+            var node = new RaiseEventStatementNode(token.Line, token.Column);
+
+            node.EventName = Consume(TokenType.Identifier, "Expected event name").Lexeme;
+
+            // Optional arguments: RaiseEvent Click(sender, args)
+            if (Match(TokenType.LeftParen))
+            {
+                if (!Check(TokenType.RightParen))
+                {
+                    do
+                    {
+                        node.Arguments.Add(ParseExpression());
+                    } while (Match(TokenType.Comma));
+                }
+                Consume(TokenType.RightParen, "Expected ')' after event arguments");
+            }
+
+            return node;
+        }
+
+        private AddHandlerStatementNode ParseAddHandlerStatement()
+        {
+            var token = Consume(TokenType.AddHandler, "Expected 'AddHandler'");
+            var node = new AddHandlerStatementNode(token.Line, token.Column);
+
+            // Parse event expression: obj.Event
+            node.EventExpression = ParseExpression();
+
+            Consume(TokenType.Comma, "Expected ',' after event expression");
+
+            // Parse handler expression: AddressOf Handler
+            node.HandlerExpression = ParseExpression();
+
+            return node;
+        }
+
+        private RemoveHandlerStatementNode ParseRemoveHandlerStatement()
+        {
+            var token = Consume(TokenType.RemoveHandler, "Expected 'RemoveHandler'");
+            var node = new RemoveHandlerStatementNode(token.Line, token.Column);
+
+            // Parse event expression: obj.Event
+            node.EventExpression = ParseExpression();
+
+            Consume(TokenType.Comma, "Expected ',' after event expression");
+
+            // Parse handler expression: AddressOf Handler
+            node.HandlerExpression = ParseExpression();
 
             return node;
         }
@@ -2114,19 +2440,53 @@ namespace BasicLang.Compiler
                 }
                 else if (Match(TokenType.LeftParen))
                 {
-                    var call = new CallExpressionNode(expr.Line, expr.Column);
-                    call.Callee = expr;
-
-                    if (!Check(TokenType.RightParen))
+                    // Check if this is generic type arguments: func(Of T)(args)
+                    if (Check(TokenType.Of))
                     {
+                        // Parse generic type arguments
+                        Advance(); // consume 'Of'
+                        var genericArgs = new List<TypeReference>();
                         do
                         {
-                            call.Arguments.Add(ParseExpression());
+                            genericArgs.Add(ParseTypeReference());
                         } while (Match(TokenType.Comma));
-                    }
+                        Consume(TokenType.RightParen, "Expected ')' after generic type arguments");
 
-                    Consume(TokenType.RightParen, "Expected ')' after arguments");
-                    expr = call;
+                        // Now expect the actual function arguments
+                        var call = new CallExpressionNode(expr.Line, expr.Column);
+                        call.Callee = expr;
+                        call.GenericArguments = genericArgs;
+
+                        if (Match(TokenType.LeftParen))
+                        {
+                            if (!Check(TokenType.RightParen))
+                            {
+                                do
+                                {
+                                    call.Arguments.Add(ParseExpression());
+                                } while (Match(TokenType.Comma));
+                            }
+                            Consume(TokenType.RightParen, "Expected ')' after arguments");
+                        }
+                        expr = call;
+                    }
+                    else
+                    {
+                        // Regular function call
+                        var call = new CallExpressionNode(expr.Line, expr.Column);
+                        call.Callee = expr;
+
+                        if (!Check(TokenType.RightParen))
+                        {
+                            do
+                            {
+                                call.Arguments.Add(ParseExpression());
+                            } while (Match(TokenType.Comma));
+                        }
+
+                        Consume(TokenType.RightParen, "Expected ')' after arguments");
+                        expr = call;
+                    }
                 }
                 else if (Match(TokenType.LeftBracket))
                 {

@@ -964,6 +964,12 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             WriteLine($"  ; {fieldAccess.Object?.Name}.{fieldAccess.FieldName} - LLVM field access not fully supported");
         }
 
+        public override void Visit(IRFieldStore fieldStore)
+        {
+            // LLVM would need GEP for struct field store
+            WriteLine($"  ; {fieldStore.Object?.Name}.{fieldStore.FieldName} = {fieldStore.Value?.Name} - LLVM field store not fully supported");
+        }
+
         #endregion
 
         private string LoadIfNeeded(IRValue value, string llvmValue)

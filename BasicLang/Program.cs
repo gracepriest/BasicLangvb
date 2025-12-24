@@ -91,6 +91,10 @@ namespace BasicLang.Compiler.Driver
             DemoOOPFeatures();
             DemoAdvancedFeatures();
             DemoAsyncAndIterators();
+            DemoOperatorOverloading();
+            DemoInterfacesEnumsDelegates();
+            DemoEvents();
+            DemoExtensionMethods();
 
             Console.WriteLine();
             Console.WriteLine("Demo complete! Check the generated files in GeneratedCode folder.");
@@ -1115,7 +1119,7 @@ End Sub
             Console.WriteLine("-".PadRight(70, '-'));
 
             string source = @"
-' Base class with constructor and method
+' Base class with constructor, properties, and methods
 Class Person
     Private _name As String
     Private _age As Integer
@@ -1126,14 +1130,29 @@ Class Person
         _age = age
     End Sub
 
+    ' Property with Get and Set
+    Property Name As String
+        Get
+            Return _name
+        End Get
+        Set(value As String)
+            _name = value
+        End Set
+    End Property
+
+    ' Read-only style property (only Get)
+    Property Age As Integer
+        Get
+            Return _age
+        End Get
+        Set(value As Integer)
+            _age = value
+        End Set
+    End Property
+
     ' Virtual method to get a greeting
     Public Overridable Function Greet() As String
         Return ""Hello, I am "" & _name
-    End Function
-
-    ' Getter method for name
-    Public Function GetName() As String
-        Return _name
     End Function
 
     ' Static factory method
@@ -1152,6 +1171,16 @@ Class Employee Inherits Person
         _department = dept
     End Sub
 
+    ' Property for department
+    Property Department As String
+        Get
+            Return _department
+        End Get
+        Set(value As String)
+            _department = value
+        End Set
+    End Property
+
     ' Override virtual method
     Public Overrides Function Greet() As String
         Return MyBase.Greet() & "" from "" & _department
@@ -1166,8 +1195,16 @@ Sub Main()
     person = New Person(""John"", 30)
     employee = New Employee(""Jane"", 25, ""Engineering"")
 
-    ' Use methods
-    PrintLine(person.GetName())
+    ' Use properties
+    PrintLine(person.Name)
+    PrintLine(person.Age)
+
+    ' Modify via property
+    person.Name = ""Johnny""
+    PrintLine(person.Name)
+
+    ' Use inherited class with properties
+    PrintLine(employee.Department)
     PrintLine(employee.Greet())
 
     ' Static method call
@@ -1603,6 +1640,467 @@ End Sub
                 {
                     Console.WriteLine(csharpCode);
                     SaveToFile("AsyncIteratorDemo.cs", csharpCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Error: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+
+            Console.WriteLine();
+        }
+
+        // ====================================================================
+        // Demo 22: Operator Overloading and Namespaces
+        // ====================================================================
+
+        static void DemoOperatorOverloading()
+        {
+            Console.WriteLine("Demo 22: Operator Overloading and Namespaces");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+' Demo: Operator Overloading and Namespaces
+' Shows how to define custom operators and organize code in namespaces
+
+Namespace MathLibrary
+
+Class Vector2D
+    Private _x As Double
+    Private _y As Double
+
+    Sub New(x As Double, y As Double)
+        _x = x
+        _y = y
+    End Sub
+
+    Property X As Double
+        Get
+            Return _x
+        End Get
+        Set(value As Double)
+            _x = value
+        End Set
+    End Property
+
+    Property Y As Double
+        Get
+            Return _y
+        End Get
+        Set(value As Double)
+            _y = value
+        End Set
+    End Property
+
+    ' Operator overloads
+    Public Shared Operator +(left As Vector2D, right As Vector2D) As Vector2D
+        Return New Vector2D(left.X + right.X, left.Y + right.Y)
+    End Operator
+
+    Public Shared Operator -(left As Vector2D, right As Vector2D) As Vector2D
+        Return New Vector2D(left.X - right.X, left.Y - right.Y)
+    End Operator
+
+    Public Shared Operator *(vec As Vector2D, scalar As Double) As Vector2D
+        Return New Vector2D(vec.X * scalar, vec.Y * scalar)
+    End Operator
+
+    Public Overridable Function ToString() As String
+        Return ""("" & _x & "", "" & _y & "")""
+    End Function
+End Class
+
+End Namespace
+
+Sub Main()
+    ' Create two vectors
+    Dim v1 As Vector2D = New Vector2D(3.0, 4.0)
+    Dim v2 As Vector2D = New Vector2D(1.0, 2.0)
+
+    ' Note: Binary operator usage in expressions will be fully supported
+    ' after semantic analyzer recognizes operator overloads
+    PrintLine(""Vector2D class with operators +, -, * defined"")
+    PrintLine(""v1 = "" & v1.ToString())
+    PrintLine(""v2 = "" & v2.ToString())
+End Sub
+";
+
+            try
+            {
+                // Lexical Analysis
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+                Console.WriteLine($"✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Parse
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+                Console.WriteLine($"✓ Parsing: {ast.Declarations.Count} declarations");
+
+                // Find namespaces and operator declarations
+                var namespaces = ast.Declarations.OfType<NamespaceNode>().ToList();
+                if (namespaces.Any())
+                {
+                    Console.WriteLine($"  - {namespaces.Count} namespace(s) declared:");
+                    foreach (var ns in namespaces)
+                    {
+                        Console.WriteLine($"      {ns.Name}");
+                        // Find classes in namespace
+                        var classesInNs = ns.Members.OfType<ClassNode>().ToList();
+                        foreach (var cls in classesInNs)
+                        {
+                            var operators = cls.Members.OfType<OperatorDeclarationNode>().ToList();
+                            Console.WriteLine($"      └─ Class '{cls.Name}' has {operators.Count} operator(s)");
+                        }
+                    }
+                }
+
+                var classes = ast.Declarations.OfType<ClassNode>().ToList();
+                foreach (var cls in classes)
+                {
+                    var operators = cls.Members.OfType<OperatorDeclarationNode>().ToList();
+                    if (operators.Any())
+                    {
+                        Console.WriteLine($"  - Class '{cls.Name}' has {operators.Count} operator(s):");
+                        foreach (var op in operators)
+                        {
+                            Console.WriteLine($"      operator {op.OperatorSymbol}");
+                        }
+                    }
+                }
+
+                // Semantic analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+                Console.WriteLine($"✓ Semantic analysis: {semanticAnalyzer.Errors.Count} errors");
+
+                // IR generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, "OperatorOverloading");
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions");
+
+                // Generate C# code
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated C# Code:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var csharpCode = CompileToCSharp(source, "OperatorOverloading");
+                if (csharpCode != null)
+                {
+                    Console.WriteLine(csharpCode);
+                    SaveToFile("OperatorOverloading.cs", csharpCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Error: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+
+            Console.WriteLine();
+        }
+
+        // ====================================================================
+        // Demo 23: Interfaces, Enums, and Delegates
+        // ====================================================================
+
+        static void DemoInterfacesEnumsDelegates()
+        {
+            Console.WriteLine("Demo 23: Interfaces, Enums, and Delegates");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+' Demo: Interfaces, Enums, and Delegates
+
+' Define an interface
+Interface IShape
+    Function GetArea() As Double
+    Function GetPerimeter() As Double
+End Interface
+
+' Define an enum
+Enum Color
+    Red
+    Green = 5
+    Blue
+End Enum
+
+Enum DayOfWeek As Integer
+    Sunday = 0
+    Monday
+    Tuesday
+    Wednesday
+    Thursday
+    Friday
+    Saturday
+End Enum
+
+' Define a delegate
+Delegate Function MathOperation(a As Integer, b As Integer) As Integer
+Delegate Sub EventHandler(sender As Object, args As String)
+
+' Class implementing interface
+Class Circle
+    Private _radius As Double
+
+    Sub New(radius As Double)
+        _radius = radius
+    End Sub
+
+    Public Function GetArea() As Double
+        Return 3.14159 * _radius * _radius
+    End Function
+
+    Public Function GetPerimeter() As Double
+        Return 2 * 3.14159 * _radius
+    End Function
+End Class
+
+Sub Main()
+    Dim circle As Circle = New Circle(5.0)
+    PrintLine(""Circle area: "" & circle.GetArea())
+    PrintLine(""Circle perimeter: "" & circle.GetPerimeter())
+End Sub
+";
+
+            try
+            {
+                // Lexical Analysis
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+                Console.WriteLine($"✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Parse
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+                Console.WriteLine($"✓ Parsing: {ast.Declarations.Count} declarations");
+
+                // Count types
+                var interfaces = ast.Declarations.OfType<InterfaceNode>().ToList();
+                var enums = ast.Declarations.OfType<EnumNode>().ToList();
+                var delegates = ast.Declarations.OfType<DelegateDeclarationNode>().ToList();
+
+                Console.WriteLine($"  - {interfaces.Count} interface(s): {string.Join(", ", interfaces.Select(i => i.Name))}");
+                Console.WriteLine($"  - {enums.Count} enum(s): {string.Join(", ", enums.Select(e => e.Name))}");
+                Console.WriteLine($"  - {delegates.Count} delegate(s): {string.Join(", ", delegates.Select(d => d.Name))}");
+
+                // Semantic analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+                Console.WriteLine($"✓ Semantic analysis: {semanticAnalyzer.Errors.Count} errors");
+
+                // IR generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, "InterfacesEnumsDelegates");
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions, {irModule.Interfaces.Count} interfaces, {irModule.Enums.Count} enums, {irModule.Delegates.Count} delegates");
+
+                // Generate C# code
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated C# Code:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var csharpCode = CompileToCSharp(source, "InterfacesEnumsDelegates");
+                if (csharpCode != null)
+                {
+                    Console.WriteLine(csharpCode);
+                    SaveToFile("InterfacesEnumsDelegates.cs", csharpCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Error: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+
+            Console.WriteLine();
+        }
+
+        // ====================================================================
+        // Demo 24: Events
+        // ====================================================================
+
+        static void DemoEvents()
+        {
+            Console.WriteLine("Demo 24: Events");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+' Demo: Events in Classes
+
+' Define a delegate for the event
+Delegate Sub ClickHandler(sender As Object, x As Integer, y As Integer)
+Delegate Sub MessageHandler(message As String)
+
+' Button class with events
+Class Button
+    Private _text As String
+
+    ' Declare events
+    Public Event Click As ClickHandler
+    Public Event MouseEnter As MessageHandler
+
+    Sub New(text As String)
+        _text = text
+    End Sub
+
+    Property Text As String
+        Get
+            Return _text
+        End Get
+        Set(value As String)
+            _text = value
+        End Set
+    End Property
+
+    ' Method that raises the Click event
+    Public Sub OnClick(x As Integer, y As Integer)
+        PrintLine(""Button '"" & _text & ""' clicked at ("" & x & "", "" & y & "")"")
+        ' Note: RaiseEvent would invoke the event handlers
+    End Sub
+
+    ' Method that raises the MouseEnter event
+    Public Sub OnMouseEnter()
+        PrintLine(""Mouse entered button '"" & _text & ""'"")
+        ' Note: RaiseEvent would invoke the event handlers
+    End Sub
+End Class
+
+' Main program
+Sub Main()
+    Dim btn As Button = New Button(""Submit"")
+
+    PrintLine(""Button text: "" & btn.Text)
+
+    ' Simulate events
+    btn.OnClick(100, 200)
+    btn.OnMouseEnter()
+End Sub
+";
+
+            try
+            {
+                // Lexical Analysis
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+                Console.WriteLine($"✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Parse
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+                Console.WriteLine($"✓ Parsing: {ast.Declarations.Count} declarations");
+
+                // Count types
+                var delegates = ast.Declarations.OfType<DelegateDeclarationNode>().ToList();
+                var classes = ast.Declarations.OfType<ClassNode>().ToList();
+
+                Console.WriteLine($"  - {delegates.Count} delegate(s): {string.Join(", ", delegates.Select(d => d.Name))}");
+                Console.WriteLine($"  - {classes.Count} class(es): {string.Join(", ", classes.Select(c => c.Name))}");
+
+                // Semantic analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+                Console.WriteLine($"✓ Semantic analysis: {semanticAnalyzer.Errors.Count} errors");
+
+                // IR generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, "EventDemo");
+
+                // Count events in classes
+                int totalEvents = irModule.Classes.Values.Sum(c => c.Events.Count);
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions, {irModule.Classes.Count} classes, {totalEvents} events");
+
+                // Generate C# code
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated C# Code:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var csharpCode = CompileToCSharp(source, "EventDemo");
+                if (csharpCode != null)
+                {
+                    Console.WriteLine(csharpCode);
+                    SaveToFile("EventDemo.cs", csharpCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Error: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+
+            Console.WriteLine();
+        }
+
+        // ====================================================================
+        // Demo 25: Extension Methods
+        // ====================================================================
+
+        static void DemoExtensionMethods()
+        {
+            Console.WriteLine("Demo 25: Extension Methods");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+' Demo: Extension Methods
+
+' Extension method for Double - squares the value
+Extension Function Squared(value As Double) As Double
+    Return value * value
+End Function
+
+' Extension method for Integer - doubles the value
+Extension Function Doubled(value As Integer) As Integer
+    Return value + value
+End Function
+
+Sub Main()
+    Dim num As Integer = 5
+    Dim d As Double = 3.5
+
+    PrintLine(""5 doubled: "" & Doubled(num))
+    PrintLine(""3.5 squared: "" & Squared(d))
+End Sub
+";
+
+            try
+            {
+                // Lexical Analysis
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+                Console.WriteLine($"✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Parse
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+                Console.WriteLine($"✓ Parsing: {ast.Declarations.Count} declarations");
+
+                // Count extension methods
+                var extensionMethods = ast.Declarations.OfType<ExtensionMethodNode>().ToList();
+                Console.WriteLine($"  - {extensionMethods.Count} extension method(s): {string.Join(", ", extensionMethods.Select(e => e.Method?.Name))}");
+
+                // Semantic analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+                Console.WriteLine($"✓ Semantic analysis: {semanticAnalyzer.Errors.Count} errors");
+
+                // IR generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, "ExtensionMethods");
+
+                // Count extension methods in IR
+                int extMethodCount = irModule.Functions.Count(f => f.IsExtension);
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions ({extMethodCount} extension methods)");
+
+                // Generate C# code
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated C# Code:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var csharpCode = CompileToCSharp(source, "ExtensionMethods");
+                if (csharpCode != null)
+                {
+                    Console.WriteLine(csharpCode);
+                    SaveToFile("ExtensionMethods.cs", csharpCode);
                 }
             }
             catch (Exception ex)

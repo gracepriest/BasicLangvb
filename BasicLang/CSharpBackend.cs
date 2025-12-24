@@ -109,67 +109,131 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             WriteLine();
 
-            // Namespace
-            WriteLine($"namespace {_options.Namespace}");
-            WriteLine("{");
-            Indent();
+            // Group types by namespace
+            var classesByNamespace = module.Classes.Values
+                .GroupBy(c => c.Namespace ?? "")
+                .ToDictionary(g => g.Key, g => g.ToList());
 
-            // Generate IR classes if present
-            if (module.Classes.Count > 0)
-            {
-                foreach (var irClass in module.Classes.Values)
-                {
-                    GenerateClass(irClass);
-                    WriteLine();
-                }
-            }
+            var interfacesByNamespace = module.Interfaces.Values
+                .GroupBy(i => i.Namespace ?? "")
+                .ToDictionary(g => g.Key, g => g.ToList());
 
-            // Generate module class for standalone functions
+            var enumsByNamespace = module.Enums.Values
+                .GroupBy(e => e.Namespace ?? "")
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            var delegatesByNamespace = module.Delegates.Values
+                .GroupBy(d => d.Namespace ?? "")
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            // Get all unique namespaces (source-defined + default)
+            var allNamespaces = new HashSet<string> { "" };  // Empty string for default namespace
+            foreach (var ns in classesByNamespace.Keys) if (!string.IsNullOrEmpty(ns)) allNamespaces.Add(ns);
+            foreach (var ns in interfacesByNamespace.Keys) if (!string.IsNullOrEmpty(ns)) allNamespaces.Add(ns);
+            foreach (var ns in enumsByNamespace.Keys) if (!string.IsNullOrEmpty(ns)) allNamespaces.Add(ns);
+            foreach (var ns in delegatesByNamespace.Keys) if (!string.IsNullOrEmpty(ns)) allNamespaces.Add(ns);
+
+            // Get standalone functions
             var standaloneFunctions = module.Functions
                 .Where(f => !f.IsExternal && !IsClassMethod(f, module))
                 .ToList();
 
-            if (standaloneFunctions.Count > 0 || module.GlobalVariables.Count > 0)
+            // Generate each namespace block
+            foreach (var ns in allNamespaces.OrderBy(n => n))
             {
-                // Class
-                WriteLine($"{_options.ClassAccessModifier} class {_options.ClassName}");
+                // Determine the effective namespace name
+                var effectiveNamespace = string.IsNullOrEmpty(ns)
+                    ? _options.Namespace
+                    : ns;
+
+                WriteLine($"namespace {effectiveNamespace}");
                 WriteLine("{");
                 Indent();
 
-                // Globals
-                if (module.GlobalVariables.Count > 0)
+                // Generate interfaces in this namespace
+                if (interfacesByNamespace.TryGetValue(ns, out var interfacesInNs))
                 {
-                    WriteLine("// Global variables");
-                    foreach (var globalVar in module.GlobalVariables.Values)
+                    foreach (var irInterface in interfacesInNs)
                     {
-                        var type = MapType(globalVar.Type);
-                        var name = SanitizeName(globalVar.Name);
-                        WriteLine($"private static {type} {name};");
+                        GenerateInterface(irInterface);
+                        WriteLine();
                     }
-                    WriteLine();
                 }
 
-                // Functions
-                bool hasUserMain = false;
-                foreach (var function in standaloneFunctions)
+                // Generate enums in this namespace
+                if (enumsByNamespace.TryGetValue(ns, out var enumsInNs))
                 {
-                    GenerateFunction(function);
-                    WriteLine();
-
-                    if (function.Name.Equals("Main", StringComparison.OrdinalIgnoreCase))
-                        hasUserMain = true;
+                    foreach (var irEnum in enumsInNs)
+                    {
+                        GenerateEnum(irEnum);
+                        WriteLine();
+                    }
                 }
 
-                // Optional default Main
-                if (_options.GenerateMainMethod && !hasUserMain)
-                    GenerateMainMethod();
+                // Generate delegates in this namespace
+                if (delegatesByNamespace.TryGetValue(ns, out var delegatesInNs))
+                {
+                    foreach (var irDelegate in delegatesInNs)
+                    {
+                        GenerateDelegate(irDelegate);
+                        WriteLine();
+                    }
+                }
+
+                // Generate classes in this namespace
+                if (classesByNamespace.TryGetValue(ns, out var classesInNs))
+                {
+                    foreach (var irClass in classesInNs)
+                    {
+                        GenerateClass(irClass);
+                        WriteLine();
+                    }
+                }
+
+                // Generate module class for standalone functions (only in default namespace)
+                if (string.IsNullOrEmpty(ns) && (standaloneFunctions.Count > 0 || module.GlobalVariables.Count > 0))
+                {
+                    // Class
+                    WriteLine($"{_options.ClassAccessModifier} class {_options.ClassName}");
+                    WriteLine("{");
+                    Indent();
+
+                    // Globals
+                    if (module.GlobalVariables.Count > 0)
+                    {
+                        WriteLine("// Global variables");
+                        foreach (var globalVar in module.GlobalVariables.Values)
+                        {
+                            var type = MapType(globalVar.Type);
+                            var name = SanitizeName(globalVar.Name);
+                            WriteLine($"private static {type} {name};");
+                        }
+                        WriteLine();
+                    }
+
+                    // Functions
+                    bool hasUserMain = false;
+                    foreach (var function in standaloneFunctions)
+                    {
+                        GenerateFunction(function);
+                        WriteLine();
+
+                        if (function.Name.Equals("Main", StringComparison.OrdinalIgnoreCase))
+                            hasUserMain = true;
+                    }
+
+                    // Optional default Main
+                    if (_options.GenerateMainMethod && !hasUserMain)
+                        GenerateMainMethod();
+
+                    Unindent();
+                    WriteLine("}");
+                }
 
                 Unindent();
                 WriteLine("}");
+                WriteLine();
             }
-
-            Unindent();
-            WriteLine("}");
 
             _currentModule = null;
             return _output.ToString();
@@ -190,6 +254,115 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// Generate a C# interface from IRInterface
+        /// </summary>
+        private void GenerateInterface(IRInterface irInterface)
+        {
+            var interfaceName = SanitizeName(irInterface.Name);
+
+            // Interface declaration with base interfaces
+            var baseList = "";
+            if (irInterface.BaseInterfaces.Count > 0)
+            {
+                baseList = " : " + string.Join(", ", irInterface.BaseInterfaces.Select(SanitizeName));
+            }
+
+            WriteLine($"public interface {interfaceName}{baseList}");
+            WriteLine("{");
+            Indent();
+
+            // Generate method signatures
+            foreach (var method in irInterface.Methods)
+            {
+                var returnType = MapType(method.ReturnType);
+                var methodName = SanitizeName(method.Name);
+                var paramList = string.Join(", ", method.Parameters.Select(p =>
+                    $"{MapTypeName(p.TypeName)} {SanitizeName(p.Name)}"));
+
+                WriteLine($"{returnType} {methodName}({paramList});");
+            }
+
+            // Generate property signatures
+            foreach (var prop in irInterface.Properties)
+            {
+                var propType = MapType(prop.Type);
+                var propName = SanitizeName(prop.Name);
+                var accessors = "";
+                if (prop.HasGetter) accessors += " get;";
+                if (prop.HasSetter) accessors += " set;";
+                WriteLine($"{propType} {propName} {{{accessors} }}");
+            }
+
+            Unindent();
+            WriteLine("}");
+        }
+
+        /// <summary>
+        /// Generate a C# enum from IREnum
+        /// </summary>
+        private void GenerateEnum(IREnum irEnum)
+        {
+            var enumName = SanitizeName(irEnum.Name);
+
+            // Underlying type
+            var underlyingType = "";
+            if (irEnum.UnderlyingType != null && irEnum.UnderlyingType.Name != "Int32")
+            {
+                underlyingType = " : " + MapType(irEnum.UnderlyingType);
+            }
+
+            WriteLine($"public enum {enumName}{underlyingType}");
+            WriteLine("{");
+            Indent();
+
+            for (int i = 0; i < irEnum.Members.Count; i++)
+            {
+                var member = irEnum.Members[i];
+                var comma = i < irEnum.Members.Count - 1 ? "," : "";
+                var value = member.Value != null ? $" = {member.Value}" : "";
+                WriteLine($"{SanitizeName(member.Name)}{value}{comma}");
+            }
+
+            Unindent();
+            WriteLine("}");
+        }
+
+        /// <summary>
+        /// Generate a C# delegate from IRDelegate
+        /// </summary>
+        private void GenerateDelegate(IRDelegate irDelegate)
+        {
+            var delegateName = SanitizeName(irDelegate.Name);
+            var returnType = MapType(irDelegate.ReturnType);
+            var paramList = string.Join(", ", irDelegate.Parameters.Select(p =>
+                $"{MapTypeName(p.TypeName)} {SanitizeName(p.Name)}"));
+
+            WriteLine($"public delegate {returnType} {delegateName}({paramList});");
+        }
+
+        /// <summary>
+        /// Map a type name string to C# type
+        /// </summary>
+        private string MapTypeName(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "object";
+            return typeName.ToLowerInvariant() switch
+            {
+                "integer" => "int",
+                "long" => "long",
+                "single" => "float",
+                "double" => "double",
+                "string" => "string",
+                "boolean" => "bool",
+                "byte" => "byte",
+                "short" => "short",
+                "object" => "object",
+                "void" => "void",
+                _ => SanitizeName(typeName)
+            };
         }
 
         /// <summary>
@@ -249,6 +422,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 GenerateProperty(irClass, prop);
                 WriteLine();
             }
+
+            // Events
+            foreach (var evt in irClass.Events)
+            {
+                GenerateEvent(evt);
+            }
+
+            if (irClass.Events.Count > 0)
+                WriteLine();
 
             // Methods
             foreach (var method in irClass.Methods)
@@ -358,6 +540,18 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         }
 
         /// <summary>
+        /// Generate an event
+        /// </summary>
+        private void GenerateEvent(IREvent evt)
+        {
+            var access = MapAccessModifier(evt.Access);
+            var staticMod = evt.IsStatic ? "static " : "";
+            var delegateType = SanitizeName(evt.DelegateType);
+            var name = SanitizeName(evt.Name);
+            WriteLine($"{access} {staticMod}event {delegateType} {name};");
+        }
+
+        /// <summary>
         /// Generate a method
         /// </summary>
         private void GenerateMethod(IRClass irClass, IRMethod method)
@@ -378,7 +572,53 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
             }
 
-            WriteLine($"{access} {staticMod}{sealedMod}{overrideMod}{virtualMod}{returnType} {name}({paramList})");
+            // Check if this is an operator overload
+            if (method.Name.StartsWith("op_"))
+            {
+                var opName = method.Name.Substring(3);  // Remove "op_" prefix
+                var opSymbol = opName switch
+                {
+                    "Addition" => "+",
+                    "Subtraction" => "-",
+                    "Multiply" => "*",
+                    "Division" => "/",
+                    "Modulus" => "%",
+                    "Equality" => "==",
+                    "Inequality" => "!=",
+                    "LessThan" => "<",
+                    "GreaterThan" => ">",
+                    "LessThanOrEqual" => "<=",
+                    "GreaterThanOrEqual" => ">=",
+                    "BitwiseAnd" => "&",
+                    "BitwiseOr" => "|",
+                    "ExclusiveOr" => "^",
+                    "LeftShift" => "<<",
+                    "RightShift" => ">>",
+                    "UnaryNegation" => "-",
+                    "UnaryPlus" => "+",
+                    "LogicalNot" => "!",
+                    "OnesComplement" => "~",
+                    "Increment" => "++",
+                    "Decrement" => "--",
+                    "Implicit" => "implicit operator",
+                    "Explicit" => "explicit operator",
+                    _ => opName
+                };
+
+                // Check if this is a conversion operator
+                if (opSymbol == "implicit operator" || opSymbol == "explicit operator")
+                {
+                    WriteLine($"public static {opSymbol} {returnType}({paramList})");
+                }
+                else
+                {
+                    WriteLine($"public static {returnType} operator {opSymbol}({paramList})");
+                }
+            }
+            else
+            {
+                WriteLine($"{access} {staticMod}{sealedMod}{overrideMod}{virtualMod}{returnType} {name}({paramList})");
+            }
             WriteLine("{");
             Indent();
 
@@ -525,6 +765,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             AnalyzeUseCounts(function);
             BuildTempDefinitions(function);
 
+            // Check if this is an operator overload (generated with op_ prefix)
+            // Function names can be "op_Addition" or "ClassName.op_Addition"
+            // Check before sanitizing since sanitization removes dots
+            if (function.Name.Contains(".op_") || function.Name.StartsWith("op_"))
+            {
+                GenerateOperator(function);
+                return;
+            }
+
             // Signature
             var returnType = MapType(function.ReturnType);
             var functionName = SanitizeName(function.Name);
@@ -536,8 +785,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 genericParams = "<" + string.Join(", ", function.GenericParameters) + ">";
             }
 
-            var parameters = string.Join(", ", function.Parameters.Select(p =>
-                $"{MapType(p.Type)} {GetValueName(p)}"));
+            // Generate parameters, with 'this' modifier for extension methods
+            var paramList = new List<string>();
+            for (int i = 0; i < function.Parameters.Count; i++)
+            {
+                var p = function.Parameters[i];
+                var thisModifier = (function.IsExtension && i == 0) ? "this " : "";
+                paramList.Add($"{thisModifier}{MapType(p.Type)} {GetValueName(p)}");
+            }
+            var parameters = string.Join(", ", paramList);
 
             // Handle async and iterator modifiers
             var asyncModifier = function.IsAsync ? "async " : "";
@@ -637,6 +893,88 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         _tempDefsByName[v.Name] = v;
                 }
             }
+        }
+
+        private void GenerateOperator(IRFunction function)
+        {
+            var returnType = MapType(function.ReturnType);
+
+            // Extract operator name - function name can be "op_Addition" or "ClassName.op_Addition"
+            var funcName = function.Name;
+            var opIndex = funcName.IndexOf("op_");
+            var opName = opIndex >= 0 ? funcName.Substring(opIndex + 3) : funcName;
+
+            // Map operator method names to C# operator symbols
+            var opSymbol = opName switch
+            {
+                "Addition" => "+",
+                "Subtraction" => "-",
+                "Multiply" => "*",
+                "Division" => "/",
+                "Modulus" => "%",
+                "BitwiseAnd" => "&",
+                "BitwiseOr" => "|",
+                "ExclusiveOr" => "^",
+                "LeftShift" => "<<",
+                "RightShift" => ">>",
+                "Equality" => "==",
+                "Inequality" => "!=",
+                "LessThan" => "<",
+                "GreaterThan" => ">",
+                "LessThanOrEqual" => "<=",
+                "GreaterThanOrEqual" => ">=",
+                "UnaryNegation" => "-",
+                "UnaryPlus" => "+",
+                "LogicalNot" => "!",
+                "OnesComplement" => "~",
+                "True" => "true",
+                "False" => "false",
+                "Increment" => "++",
+                "Decrement" => "--",
+                "Implicit" => "implicit operator",
+                "Explicit" => "explicit operator",
+                _ => opName  // Fallback to method name
+            };
+
+            var parameters = string.Join(", ", function.Parameters.Select(p =>
+                $"{MapType(p.Type)} {GetValueName(p)}"));
+
+            // Check if this is a conversion operator
+            if (opSymbol == "implicit operator" || opSymbol == "explicit operator")
+            {
+                WriteLine($"public static {opSymbol} {returnType}({parameters})");
+            }
+            else
+            {
+                WriteLine($"public static {returnType} operator {opSymbol}({parameters})");
+            }
+
+            WriteLine("{");
+            Indent();
+
+            // Declare locals
+            var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var localVar in function.LocalVariables)
+            {
+                var varName = GetValueName(localVar);
+                if (declared.Add(varName))
+                {
+                    var csharpType = MapType(localVar.Type);
+                    var defaultValue = GetDefaultValue(localVar.Type);
+                    WriteLine($"{csharpType} {varName} = {defaultValue};");
+                }
+            }
+
+            if (function.LocalVariables.Count > 0)
+                WriteLine("");
+
+            // Generate body
+            _processedBlocks.Clear();
+            GenerateStructuredBlock(function.EntryBlock);
+
+            Unindent();
+            WriteLine("}");
+            WriteLine("");
         }
 
         private void GenerateBlock(BasicBlock block, HashSet<BasicBlock> visited)
@@ -1820,6 +2158,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var fieldName = SanitizeName(fieldAccess.FieldName);
             var type = MapType(fieldAccess.Type);
             WriteLine($"{type} {fieldAccess.Name} = {obj}.{fieldName};");
+        }
+
+        public void Visit(IRFieldStore fieldStore)
+        {
+            var obj = EmitExpression(fieldStore.Object);
+            var fieldName = SanitizeName(fieldStore.FieldName);
+            var value = EmitExpression(fieldStore.Value);
+            WriteLine($"{obj}.{fieldName} = {value};");
         }
 
         // ====================================================================

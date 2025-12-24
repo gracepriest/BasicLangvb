@@ -146,6 +146,7 @@ public class TypeInfo
         Class,
         Interface,
         Structure,
+        Enum,
         UserDefinedType,
         Delegate,
         TypeParameter,  // Generic type parameter
