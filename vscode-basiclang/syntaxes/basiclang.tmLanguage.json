@@ -1,0 +1,159 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "BasicLang",
+  "scopeName": "source.basiclang",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#storage" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#operators" },
+    { "include": "#functions" },
+    { "include": "#builtins" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.apostrophe.basiclang",
+          "match": "'.*$"
+        },
+        {
+          "name": "comment.line.rem.basiclang",
+          "match": "(?i)^\\s*REM\\b.*$"
+        },
+        {
+          "name": "comment.block.basiclang",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.basiclang",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.basiclang",
+              "match": "\"\"|\\\\"
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.basiclang",
+          "match": "&[Hh][0-9A-Fa-f]+"
+        },
+        {
+          "name": "constant.numeric.octal.basiclang",
+          "match": "&[Oo][0-7]+"
+        },
+        {
+          "name": "constant.numeric.binary.basiclang",
+          "match": "&[Bb][01]+"
+        },
+        {
+          "name": "constant.numeric.float.basiclang",
+          "match": "\\b\\d+\\.\\d+([Ee][+-]?\\d+)?[FfDd]?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.basiclang",
+          "match": "\\b\\d+[LlSsIi%&!#@]?\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.basiclang",
+          "match": "(?i)\\b(If|Then|Else|ElseIf|End\\s*If|Select|Case|End\\s*Select|For|To|Step|Next|While|Wend|Do|Loop|Until|Exit|Continue|GoTo|Return|Throw|Try|Catch|Finally|End\\s*Try|With|End\\s*With)\\b"
+        },
+        {
+          "name": "keyword.other.basiclang",
+          "match": "(?i)\\b(Imports|Using|Namespace|End\\s*Namespace|Module|End\\s*Module|Option|Strict|Explicit|Infer|Compare|Binary|Text)\\b"
+        }
+      ]
+    },
+    "storage": {
+      "patterns": [
+        {
+          "name": "storage.type.function.basiclang",
+          "match": "(?i)\\b(Sub|Function|End\\s*Sub|End\\s*Function|Property|End\\s*Property|Get|End\\s*Get|Set|End\\s*Set|Operator|End\\s*Operator)\\b"
+        },
+        {
+          "name": "storage.type.class.basiclang",
+          "match": "(?i)\\b(Class|End\\s*Class|Structure|End\\s*Structure|Interface|End\\s*Interface|Enum|End\\s*Enum|Inherits|Implements)\\b"
+        },
+        {
+          "name": "storage.modifier.basiclang",
+          "match": "(?i)\\b(Public|Private|Protected|Friend|Static|Shared|Const|Dim|ReDim|Preserve|ByVal|ByRef|Optional|ParamArray|ReadOnly|WriteOnly|Overloads|Overrides|Overridable|NotOverridable|MustOverride|MustInherit|NotInheritable|Partial|Shadows|WithEvents|Default|Iterator|Async|Await)\\b"
+        },
+        {
+          "name": "storage.type.basiclang",
+          "match": "(?i)\\b(As|Of|New|Me|MyBase|MyClass|TypeOf|Is|IsNot|Like|GetType|DirectCast|TryCast|CType|AddressOf)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.basiclang",
+          "match": "(?i)\\b(Integer|Long|Short|Byte|SByte|UInteger|ULong|UShort|Single|Double|Decimal|Boolean|Char|String|Object|Date|Variant|Currency|Nothing|Void)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.basiclang",
+          "match": "(?i)\\b(True|False|Nothing|Null|Empty|vbCrLf|vbCr|vbLf|vbTab|vbNullString|vbNullChar)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.logical.basiclang",
+          "match": "(?i)\\b(And|AndAlso|Or|OrElse|Not|Xor|Mod|Eqv|Imp)\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.basiclang",
+          "match": "=|<>|<|>|<=|>="
+        },
+        {
+          "name": "keyword.operator.arithmetic.basiclang",
+          "match": "\\+|-|\\*|/|\\\\|\\^|&"
+        },
+        {
+          "name": "keyword.operator.assignment.basiclang",
+          "match": "\\+=|-=|\\*=|/=|\\\\=|\\^=|&=|<<=|>>="
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.basiclang",
+          "match": "(?i)\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.basiclang",
+          "match": "(?i)\\b(PrintLine|Print|ReadLine|Len|Left|Right|Mid|UCase|LCase|Trim|LTrim|RTrim|InStr|InStrRev|Replace|Split|Join|Asc|Chr|Str|Val|Format|Space|String|Abs|Sgn|Int|Fix|Sqrt|Sqr|Exp|Log|Log10|Sin|Cos|Tan|Atn|Atan|Atan2|Floor|Ceiling|Round|Rnd|Randomize|Min|Max|Pow|CInt|CLng|CSng|CDbl|CStr|CBool|CByte|CShort|CDate|CChar|CDec|CObj|UBound|LBound|Array|IsArray|IsDate|IsNumeric|IsNothing|IIf|Choose|Switch|MsgBox|InputBox|Now|Today|DateAdd|DateDiff|DatePart|Year|Month|Day|Hour|Minute|Second|Timer|Err|Error|On\\s+Error)\\b"
+        }
+      ]
+    }
+  }
+}

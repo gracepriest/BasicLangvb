@@ -402,20 +402,38 @@ namespace BasicLang.Compiler
         {
             WriteLine($"ForEach {node.Variable} : {node.VariableType} In:");
             Indent();
-            
+
             WriteLine("Collection:");
             Indent();
             node.Collection.Accept(this);
             Unindent();
-            
+
             WriteLine("Body:");
             Indent();
             node.Body.Accept(this);
             Unindent();
-            
+
             Unindent();
         }
-        
+
+        public void Visit(WithStatementNode node)
+        {
+            WriteLine("With:");
+            Indent();
+
+            WriteLine("Object:");
+            Indent();
+            node.Object.Accept(this);
+            Unindent();
+
+            WriteLine("Body:");
+            Indent();
+            node.Body.Accept(this);
+            Unindent();
+
+            Unindent();
+        }
+
         public void Visit(TryStatementNode node)
         {
             WriteLine("Try:");
@@ -441,7 +459,18 @@ namespace BasicLang.Compiler
             node.Body.Accept(this);
             Unindent();
         }
-        
+
+        public void Visit(ThrowStatementNode node)
+        {
+            WriteLine("Throw:");
+            if (node.Exception != null)
+            {
+                Indent();
+                node.Exception.Accept(this);
+                Unindent();
+            }
+        }
+
         public void Visit(ReturnStatementNode node)
         {
             WriteLine("Return:");
@@ -514,7 +543,28 @@ namespace BasicLang.Compiler
         {
             WriteLine($"Literal: {node.Value} ({node.LiteralType})");
         }
-        
+
+        public void Visit(InterpolatedStringNode node)
+        {
+            WriteLine($"InterpolatedString ({node.Parts.Count} parts):");
+            Indent();
+            foreach (var part in node.Parts)
+            {
+                if (part is string text)
+                {
+                    WriteLine($"Text: \"{text}\"");
+                }
+                else if (part is ExpressionNode expr)
+                {
+                    WriteLine("Expression:");
+                    Indent();
+                    expr.Accept(this);
+                    Unindent();
+                }
+            }
+            Unindent();
+        }
+
         public void Visit(IdentifierExpressionNode node)
         {
             WriteLine($"Identifier: {node.Name}");
@@ -623,7 +673,20 @@ namespace BasicLang.Compiler
             node.Method.Accept(this);
             Unindent();
         }
-        
+
+        public void Visit(ExternDeclarationNode node)
+        {
+            var kind = node.IsFunction ? "Function" : "Sub";
+            var returnType = node.ReturnType != null ? $" As {node.ReturnType}" : "";
+            WriteLine($"Extern {kind} {node.Name}({node.Parameters.Count} parameters){returnType}");
+            Indent();
+            foreach (var kvp in node.PlatformImplementations)
+            {
+                WriteLine($"{kvp.Key}: \"{kvp.Value}\"");
+            }
+            Unindent();
+        }
+
         public void Visit(UsingDirectiveNode node)
         {
             WriteLine($"Using {node.Namespace}");
@@ -632,6 +695,298 @@ namespace BasicLang.Compiler
         public void Visit(ImportDirectiveNode node)
         {
             WriteLine($"Import {node.Module}");
+        }
+
+        public void Visit(ConstructorNode node)
+        {
+            var access = node.Access != AccessModifier.Public ? $"{node.Access} " : "";
+            WriteLine($"{access}Sub New({node.Parameters.Count} parameters)");
+            Indent();
+            if (node.BaseConstructorArgs.Count > 0)
+            {
+                WriteLine($"MyBase.New({node.BaseConstructorArgs.Count} arguments)");
+            }
+            if (node.Body != null)
+            {
+                node.Body.Accept(this);
+            }
+            Unindent();
+        }
+
+        public void Visit(PropertyNode node)
+        {
+            var access = node.Access != AccessModifier.Public ? $"{node.Access} " : "";
+            var modifiers = "";
+            if (node.IsStatic) modifiers += "Shared ";
+            if (node.IsReadOnly) modifiers += "ReadOnly ";
+            if (node.IsWriteOnly) modifiers += "WriteOnly ";
+            var propertyType = node.PropertyType != null ? $" As {node.PropertyType}" : "";
+            WriteLine($"{access}{modifiers}Property {node.Name}{propertyType}");
+            Indent();
+            if (node.Getter != null)
+            {
+                WriteLine("Get");
+                Indent();
+                node.Getter.Accept(this);
+                Unindent();
+            }
+            if (node.Setter != null)
+            {
+                WriteLine("Set");
+                Indent();
+                node.Setter.Accept(this);
+                Unindent();
+            }
+            Unindent();
+        }
+
+        public void Visit(MyBaseExpressionNode node)
+        {
+            WriteLine("MyBase");
+        }
+
+        public void Visit(LambdaExpressionNode node)
+        {
+            var kind = node.IsFunction ? "Function" : "Sub";
+            WriteLine($"Lambda {kind}({node.Parameters.Count} parameters):");
+            Indent();
+
+            if (node.Parameters.Count > 0)
+            {
+                WriteLine("Parameters:");
+                Indent();
+                foreach (var param in node.Parameters)
+                {
+                    param.Accept(this);
+                }
+                Unindent();
+            }
+
+            if (node.Body != null)
+            {
+                WriteLine("Expression Body:");
+                Indent();
+                node.Body.Accept(this);
+                Unindent();
+            }
+            else if (node.StatementBody != null)
+            {
+                WriteLine("Statement Body:");
+                Indent();
+                node.StatementBody.Accept(this);
+                Unindent();
+            }
+
+            Unindent();
+        }
+
+        public void Visit(CollectionInitializerNode node)
+        {
+            WriteLine($"CollectionInitializer ({node.Elements.Count} elements):");
+            Indent();
+            foreach (var element in node.Elements)
+            {
+                element.Accept(this);
+            }
+            Unindent();
+        }
+
+        public void Visit(TupleLiteralNode node)
+        {
+            WriteLine($"TupleLiteral ({node.Elements.Count} elements):");
+            Indent();
+            for (int i = 0; i < node.Elements.Count; i++)
+            {
+                if (i < node.ElementNames.Count && !string.IsNullOrEmpty(node.ElementNames[i]))
+                {
+                    WriteLine($"{node.ElementNames[i]}:");
+                    Indent();
+                    node.Elements[i].Accept(this);
+                    Unindent();
+                }
+                else
+                {
+                    node.Elements[i].Accept(this);
+                }
+            }
+            Unindent();
+        }
+
+        public void Visit(OperatorDeclarationNode node)
+        {
+            var modifiers = new List<string>();
+            if (node.IsShared) modifiers.Add("Shared");
+            if (node.IsWidening) modifiers.Add("Widening");
+            if (node.IsNarrowing) modifiers.Add("Narrowing");
+            var modStr = modifiers.Count > 0 ? string.Join(" ", modifiers) + " " : "";
+
+            WriteLine($"{modStr}Operator {node.OperatorSymbol}({node.Parameters.Count} params) As {node.ReturnType}:");
+            Indent();
+
+            WriteLine("Parameters:");
+            Indent();
+            foreach (var param in node.Parameters)
+            {
+                param.Accept(this);
+            }
+            Unindent();
+
+            if (node.Body != null)
+            {
+                WriteLine("Body:");
+                Indent();
+                node.Body.Accept(this);
+                Unindent();
+            }
+
+            Unindent();
+        }
+
+        public void Visit(EventDeclarationNode node)
+        {
+            WriteLine($"{node.Access} Event {node.Name} As {node.EventType}");
+        }
+
+        public void Visit(RaiseEventStatementNode node)
+        {
+            WriteLine($"RaiseEvent {node.EventName}({node.Arguments.Count} args):");
+            Indent();
+            foreach (var arg in node.Arguments)
+            {
+                arg.Accept(this);
+            }
+            Unindent();
+        }
+
+        public void Visit(AddHandlerStatementNode node)
+        {
+            WriteLine("AddHandler:");
+            Indent();
+            WriteLine("Event:");
+            Indent();
+            node.EventExpression?.Accept(this);
+            Unindent();
+            WriteLine("Handler:");
+            Indent();
+            node.HandlerExpression?.Accept(this);
+            Unindent();
+            Unindent();
+        }
+
+        public void Visit(RemoveHandlerStatementNode node)
+        {
+            WriteLine("RemoveHandler:");
+            Indent();
+            WriteLine("Event:");
+            Indent();
+            node.EventExpression?.Accept(this);
+            Unindent();
+            WriteLine("Handler:");
+            Indent();
+            node.HandlerExpression?.Accept(this);
+            Unindent();
+            Unindent();
+        }
+
+        public void Visit(TypePatternNode node)
+        {
+            WriteLine($"TypePattern: {node.MatchType}");
+            if (!string.IsNullOrEmpty(node.VariableName))
+            {
+                Indent();
+                WriteLine($"Binding: {node.VariableName}");
+                Unindent();
+            }
+            if (node.WhenGuard != null)
+            {
+                Indent();
+                WriteLine("When:");
+                Indent();
+                node.WhenGuard.Accept(this);
+                Unindent();
+                Unindent();
+            }
+        }
+
+        public void Visit(ConstantPatternNode node)
+        {
+            WriteLine("ConstantPattern:");
+            Indent();
+            node.Value?.Accept(this);
+            Unindent();
+            if (node.WhenGuard != null)
+            {
+                Indent();
+                WriteLine("When:");
+                Indent();
+                node.WhenGuard.Accept(this);
+                Unindent();
+                Unindent();
+            }
+        }
+
+        public void Visit(RangePatternNode node)
+        {
+            WriteLine("RangePattern:");
+            Indent();
+            WriteLine("Lower:");
+            Indent();
+            node.LowerBound?.Accept(this);
+            Unindent();
+            WriteLine("Upper:");
+            Indent();
+            node.UpperBound?.Accept(this);
+            Unindent();
+            Unindent();
+            if (node.WhenGuard != null)
+            {
+                Indent();
+                WriteLine("When:");
+                Indent();
+                node.WhenGuard.Accept(this);
+                Unindent();
+                Unindent();
+            }
+        }
+
+        public void Visit(ComparisonPatternNode node)
+        {
+            WriteLine($"ComparisonPattern: {node.Operator}");
+            Indent();
+            node.Value?.Accept(this);
+            Unindent();
+            if (node.WhenGuard != null)
+            {
+                Indent();
+                WriteLine("When:");
+                Indent();
+                node.WhenGuard.Accept(this);
+                Unindent();
+                Unindent();
+            }
+        }
+
+        public void Visit(AwaitExpressionNode node)
+        {
+            WriteLine("Await:");
+            Indent();
+            node.Expression?.Accept(this);
+            Unindent();
+        }
+
+        public void Visit(YieldStatementNode node)
+        {
+            if (node.IsBreak)
+            {
+                WriteLine("Yield Break");
+            }
+            else
+            {
+                WriteLine("Yield Return:");
+                Indent();
+                node.Value?.Accept(this);
+                Unindent();
+            }
         }
     }
 }

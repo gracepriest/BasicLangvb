@@ -1,5 +1,7 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace GeneratedCode
 {
@@ -7,7 +9,7 @@ namespace GeneratedCode
     {
         public static bool IsPrime(int n)
         {
-            int i = default(int);
+            int i = 0;
 
             if (n <= 1)
             {
@@ -31,8 +33,8 @@ namespace GeneratedCode
 
         public static int CountPrimes(int max)
         {
-            int count = default(int);
-            int i = default(int);
+            int count = 0;
+            int i = 0;
 
             count = 0;
             i = 2;
@@ -49,10 +51,9 @@ namespace GeneratedCode
 
         public static void Main()
         {
-            int primeCount = default(int);
+            int primeCount = 0;
 
             primeCount = CountPrimes(100);
-            return;
         }
 
     }

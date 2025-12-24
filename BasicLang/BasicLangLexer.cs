@@ -18,6 +18,7 @@ namespace BasicLang.Compiler
         SingleLiteral,
         DoubleLiteral,
         StringLiteral,
+        InterpolatedStringLiteral,  // $"Hello {name}"
         CharLiteral,
         BooleanLiteral,
         
@@ -68,6 +69,8 @@ namespace BasicLang.Compiler
         Step,
         Exit,
         Until,
+        With,
+        EndWith,
 
         // Keywords - Functions and Subroutines
         Sub,
@@ -79,7 +82,9 @@ namespace BasicLang.Compiler
         // Keywords - Error Handling
         Try,
         Catch,
+        Finally,
         EndTry,
+        Throw,
         
         // Keywords - Compilation Directives
         HashIf,
@@ -104,7 +109,28 @@ namespace BasicLang.Compiler
         Implements,
         New,
         Me,
-        
+        MyBase,
+
+        // Keywords - OOP Properties
+        Property,
+        EndProperty,
+        Get,
+        EndGet,
+        Set,
+        EndSet,
+        ReadOnly,
+        WriteOnly,
+
+        // Keywords - OOP Modifiers
+        Shared,          // Static
+        Overridable,     // Virtual
+        Overrides,       // Override
+        MustOverride,    // Abstract
+        NotOverridable,  // Sealed
+        Operator,        // For operator overloading
+        Widening,        // For widening conversion
+        Narrowing,       // For narrowing conversion
+
         // Keywords - Namespaces and Modules
         Namespace,
         EndNamespace,
@@ -117,9 +143,26 @@ namespace BasicLang.Compiler
         // Keywords - Extensions
         Extension,
         
-        // Keywords - Delegates
+        // Keywords - Delegates and Events
         Delegate,
-        
+        Event,
+        RaiseEvent,
+        AddHandler,
+        RemoveHandler,
+        Handles,
+
+        // Keywords - Async
+        Async,
+        Await,
+
+        // Keywords - Iterators
+        Yield,
+        Iterator,
+
+        // Keywords - Platform Externs
+        Extern,
+        EndExtern,
+
         // Keywords - Functions
         AddressOf,
         Len,
@@ -190,7 +233,8 @@ namespace BasicLang.Compiler
         Semicolon,
         Apostrophe,
         Caret,
-        
+        QuestionMark,
+
         // Special
         Newline,
         Comment,
@@ -282,6 +326,8 @@ namespace BasicLang.Compiler
             { "Step", TokenType.Step },
             { "Exit", TokenType.Exit },
             { "Until", TokenType.Until },
+            { "With", TokenType.With },
+            { "End With", TokenType.EndWith },
 
             // Functions and Subroutines
             { "Sub", TokenType.Sub },
@@ -293,7 +339,9 @@ namespace BasicLang.Compiler
             // Error Handling
             { "Try", TokenType.Try },
             { "Catch", TokenType.Catch },
+            { "Finally", TokenType.Finally },
             { "End Try", TokenType.EndTry },
+            { "Throw", TokenType.Throw },
             
             // Templates
             { "Template", TokenType.Template },
@@ -312,7 +360,28 @@ namespace BasicLang.Compiler
             { "Implements", TokenType.Implements },
             { "New", TokenType.New },
             { "Me", TokenType.Me },
-            
+            { "MyBase", TokenType.MyBase },
+
+            // OOP Properties
+            { "Property", TokenType.Property },
+            { "End Property", TokenType.EndProperty },
+            { "Get", TokenType.Get },
+            { "End Get", TokenType.EndGet },
+            { "Set", TokenType.Set },
+            { "End Set", TokenType.EndSet },
+            { "ReadOnly", TokenType.ReadOnly },
+            { "WriteOnly", TokenType.WriteOnly },
+
+            // OOP Modifiers
+            { "Shared", TokenType.Shared },
+            { "Overridable", TokenType.Overridable },
+            { "Overrides", TokenType.Overrides },
+            { "MustOverride", TokenType.MustOverride },
+            { "NotOverridable", TokenType.NotOverridable },
+            { "Operator", TokenType.Operator },
+            { "Widening", TokenType.Widening },
+            { "Narrowing", TokenType.Narrowing },
+
             // Namespaces and Modules
             { "Namespace", TokenType.Namespace },
             { "End Namespace", TokenType.EndNamespace },
@@ -327,6 +396,23 @@ namespace BasicLang.Compiler
             
             // Delegates
             { "Delegate", TokenType.Delegate },
+            { "Event", TokenType.Event },
+            { "RaiseEvent", TokenType.RaiseEvent },
+            { "AddHandler", TokenType.AddHandler },
+            { "RemoveHandler", TokenType.RemoveHandler },
+            { "Handles", TokenType.Handles },
+
+            // Async
+            { "Async", TokenType.Async },
+            { "Await", TokenType.Await },
+
+            // Iterators
+            { "Yield", TokenType.Yield },
+            { "Iterator", TokenType.Iterator },
+
+            // Platform Externs
+            { "Extern", TokenType.Extern },
+            { "End Extern", TokenType.EndExtern },
             
             // Built-in Functions (special syntax, not regular function calls)
             { "AddressOf", TokenType.AddressOf },
@@ -396,7 +482,8 @@ namespace BasicLang.Compiler
                 case ';': AddToken(TokenType.Semicolon, ";", null, startLine, startColumn); break;
                 case '^': AddToken(TokenType.Caret, "^", null, startLine, startColumn); break;
                 case '~': AddToken(TokenType.BitwiseNot, "~", null, startLine, startColumn); break;
-                
+                case '?': AddToken(TokenType.QuestionMark, "?", null, startLine, startColumn); break;
+
                 // Operators that can be multi-character
                 case '+':
                     if (Match('+'))
@@ -500,6 +587,19 @@ namespace BasicLang.Compiler
                     ScanDirective(startLine, startColumn);
                     break;
                     
+                case '$':
+                    // Check for interpolated string $"..."
+                    if (Peek() == '"')
+                    {
+                        Advance(); // consume the opening quote
+                        ScanInterpolatedString(startLine, startColumn);
+                    }
+                    else
+                    {
+                        AddToken(TokenType.Unknown, "$", null, startLine, startColumn);
+                    }
+                    break;
+
                 case '"':
                     // String literal
                     ScanString(startLine, startColumn);
@@ -626,7 +726,67 @@ namespace BasicLang.Compiler
             
             AddToken(TokenType.StringLiteral, $"\"{sb}\"", sb.ToString(), startLine, startColumn);
         }
-        
+
+        private void ScanInterpolatedString(int startLine, int startColumn)
+        {
+            // Stores the raw content of the interpolated string including {expressions}
+            StringBuilder sb = new StringBuilder();
+
+            while (!IsAtEnd() && Peek() != '"')
+            {
+                if (Peek() == '\\')
+                {
+                    Advance(); // Consume backslash
+                    if (!IsAtEnd())
+                    {
+                        char escaped = Advance();
+                        switch (escaped)
+                        {
+                            case 'n': sb.Append('\n'); break;
+                            case 'r': sb.Append('\r'); break;
+                            case 't': sb.Append('\t'); break;
+                            case '\\': sb.Append('\\'); break;
+                            case '"': sb.Append('"'); break;
+                            case '{': sb.Append('{'); break;
+                            case '}': sb.Append('}'); break;
+                            default: sb.Append(escaped); break;
+                        }
+                    }
+                }
+                else if (Peek() == '{')
+                {
+                    sb.Append(Advance()); // Add the '{'
+                    // Read until matching '}'
+                    int braceDepth = 1;
+                    while (!IsAtEnd() && braceDepth > 0)
+                    {
+                        char c = Advance();
+                        sb.Append(c);
+                        if (c == '{') braceDepth++;
+                        else if (c == '}') braceDepth--;
+                    }
+                }
+                else
+                {
+                    if (Peek() == '\n')
+                    {
+                        _line++;
+                        _column = 0;
+                    }
+                    sb.Append(Advance());
+                }
+            }
+
+            if (IsAtEnd())
+            {
+                throw new Exception($"Unterminated interpolated string at line {startLine}, column {startColumn}");
+            }
+
+            Advance(); // Consume closing quote
+
+            AddToken(TokenType.InterpolatedStringLiteral, $"$\"{sb}\"", sb.ToString(), startLine, startColumn);
+        }
+
         private void ScanNumber(char firstDigit, int startLine, int startColumn)
         {
             StringBuilder sb = new StringBuilder();

@@ -100,6 +100,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Add default usings
             _usings.Add("System");
             _usings.Add("System.Collections.Generic");
+            _usings.Add("System.Threading.Tasks");
+            _usings.Add("System.Collections");
 
             // Emit using directives
             foreach (var usingDirective in _usings.OrderBy(u => u))
@@ -112,49 +114,364 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine("{");
             Indent();
 
-            // Class
-            WriteLine($"{_options.ClassAccessModifier} class {_options.ClassName}");
-            WriteLine("{");
-            Indent();
-
-            // Globals
-            if (module.GlobalVariables.Count > 0)
+            // Generate IR classes if present
+            if (module.Classes.Count > 0)
             {
-                WriteLine("// Global variables");
-                foreach (var globalVar in module.GlobalVariables.Values)
+                foreach (var irClass in module.Classes.Values)
                 {
-                    var type = MapType(globalVar.Type);
-                    var name = SanitizeName(globalVar.Name);
-                    WriteLine($"private static {type} {name};");
+                    GenerateClass(irClass);
+                    WriteLine();
                 }
-                WriteLine();
             }
 
-            // Functions
-            bool hasUserMain = false;
-            foreach (var function in module.Functions)
+            // Generate module class for standalone functions
+            var standaloneFunctions = module.Functions
+                .Where(f => !f.IsExternal && !IsClassMethod(f, module))
+                .ToList();
+
+            if (standaloneFunctions.Count > 0 || module.GlobalVariables.Count > 0)
             {
-                if (function.IsExternal) continue;
+                // Class
+                WriteLine($"{_options.ClassAccessModifier} class {_options.ClassName}");
+                WriteLine("{");
+                Indent();
 
-                GenerateFunction(function);
-                WriteLine();
+                // Globals
+                if (module.GlobalVariables.Count > 0)
+                {
+                    WriteLine("// Global variables");
+                    foreach (var globalVar in module.GlobalVariables.Values)
+                    {
+                        var type = MapType(globalVar.Type);
+                        var name = SanitizeName(globalVar.Name);
+                        WriteLine($"private static {type} {name};");
+                    }
+                    WriteLine();
+                }
 
-                if (function.Name.Equals("Main", StringComparison.OrdinalIgnoreCase))
-                    hasUserMain = true;
+                // Functions
+                bool hasUserMain = false;
+                foreach (var function in standaloneFunctions)
+                {
+                    GenerateFunction(function);
+                    WriteLine();
+
+                    if (function.Name.Equals("Main", StringComparison.OrdinalIgnoreCase))
+                        hasUserMain = true;
+                }
+
+                // Optional default Main
+                if (_options.GenerateMainMethod && !hasUserMain)
+                    GenerateMainMethod();
+
+                Unindent();
+                WriteLine("}");
             }
-
-            // Optional default Main
-            if (_options.GenerateMainMethod && !hasUserMain)
-                GenerateMainMethod();
-
-            Unindent();
-            WriteLine("}");
 
             Unindent();
             WriteLine("}");
 
             _currentModule = null;
             return _output.ToString();
+        }
+
+        /// <summary>
+        /// Check if a function belongs to a class
+        /// </summary>
+        private bool IsClassMethod(IRFunction function, IRModule module)
+        {
+            foreach (var irClass in module.Classes.Values)
+            {
+                if (irClass.Methods.Any(m => m.Implementation == function))
+                    return true;
+                if (irClass.Constructors.Any(c => c.Implementation == function))
+                    return true;
+                if (irClass.Properties.Any(p => p.Getter == function || p.Setter == function))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Generate a C# class from IRClass
+        /// </summary>
+        private void GenerateClass(IRClass irClass)
+        {
+            // Class declaration with generic parameters
+            var className = SanitizeName(irClass.Name);
+            var genericParams = "";
+            if (irClass.GenericParameters != null && irClass.GenericParameters.Count > 0)
+            {
+                genericParams = "<" + string.Join(", ", irClass.GenericParameters) + ">";
+            }
+
+            var classDecl = $"public class {className}{genericParams}";
+            if (!string.IsNullOrEmpty(irClass.BaseClass))
+            {
+                classDecl += $" : {SanitizeName(irClass.BaseClass)}";
+                if (irClass.Interfaces.Count > 0)
+                {
+                    classDecl += ", " + string.Join(", ", irClass.Interfaces.Select(SanitizeName));
+                }
+            }
+            else if (irClass.Interfaces.Count > 0)
+            {
+                classDecl += " : " + string.Join(", ", irClass.Interfaces.Select(SanitizeName));
+            }
+
+            WriteLine(classDecl);
+            WriteLine("{");
+            Indent();
+
+            // Fields
+            foreach (var field in irClass.Fields)
+            {
+                var access = MapAccessModifier(field.Access);
+                var staticMod = field.IsStatic ? "static " : "";
+                var type = MapType(field.Type);
+                var name = SanitizeName(field.Name);
+                WriteLine($"{access} {staticMod}{type} {name};");
+            }
+
+            if (irClass.Fields.Count > 0)
+                WriteLine();
+
+            // Constructors
+            foreach (var ctor in irClass.Constructors)
+            {
+                GenerateConstructor(irClass, ctor);
+                WriteLine();
+            }
+
+            // Properties
+            foreach (var prop in irClass.Properties)
+            {
+                GenerateProperty(irClass, prop);
+                WriteLine();
+            }
+
+            // Methods
+            foreach (var method in irClass.Methods)
+            {
+                GenerateMethod(irClass, method);
+                WriteLine();
+            }
+
+            Unindent();
+            WriteLine("}");
+        }
+
+        /// <summary>
+        /// Generate a constructor
+        /// </summary>
+        private void GenerateConstructor(IRClass irClass, IRConstructor ctor)
+        {
+            var access = MapAccessModifier(ctor.Access);
+            var className = SanitizeName(irClass.Name);
+
+            // Generate parameter list from implementation
+            var paramList = "";
+            if (ctor.Implementation != null)
+            {
+                paramList = string.Join(", ", ctor.Implementation.Parameters.Select(p =>
+                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+            }
+
+            // Base constructor call
+            var baseCtor = "";
+            if (!string.IsNullOrEmpty(irClass.BaseClass) && ctor.BaseConstructorArgs.Count > 0)
+            {
+                var baseArgs = string.Join(", ", ctor.BaseConstructorArgs.Select(a =>
+                    a is IRConstant c ? EmitConstant(c) : SanitizeName(a.Name)));
+                baseCtor = $" : base({baseArgs})";
+            }
+
+            WriteLine($"{access} {className}({paramList}){baseCtor}");
+            WriteLine("{");
+            Indent();
+
+            // Generate body from implementation
+            if (ctor.Implementation?.EntryBlock != null)
+            {
+                _currentFunction = ctor.Implementation;
+                InitializeFunctionContext(ctor.Implementation);
+                _processedBlocks = new HashSet<BasicBlock>();
+                _loopEndBlocks = new Stack<BasicBlock>();
+                GenerateStructuredBlock(ctor.Implementation.EntryBlock);
+                _currentFunction = null;
+            }
+
+            Unindent();
+            WriteLine("}");
+        }
+
+        /// <summary>
+        /// Generate a property
+        /// </summary>
+        private void GenerateProperty(IRClass irClass, IRProperty prop)
+        {
+            var access = MapAccessModifier(prop.Access);
+            var staticMod = prop.IsStatic ? "static " : "";
+            var type = MapType(prop.Type);
+            var name = SanitizeName(prop.Name);
+
+            WriteLine($"{access} {staticMod}{type} {name}");
+            WriteLine("{");
+            Indent();
+
+            // Getter
+            if (prop.Getter != null && !prop.IsWriteOnly)
+            {
+                WriteLine("get");
+                WriteLine("{");
+                Indent();
+                _currentFunction = prop.Getter;
+                InitializeFunctionContext(prop.Getter);
+                _processedBlocks = new HashSet<BasicBlock>();
+                _loopEndBlocks = new Stack<BasicBlock>();
+                if (prop.Getter.EntryBlock != null)
+                    GenerateStructuredBlock(prop.Getter.EntryBlock);
+                _currentFunction = null;
+                Unindent();
+                WriteLine("}");
+            }
+
+            // Setter
+            if (prop.Setter != null && !prop.IsReadOnly)
+            {
+                WriteLine("set");
+                WriteLine("{");
+                Indent();
+                _currentFunction = prop.Setter;
+                InitializeFunctionContext(prop.Setter);
+                _processedBlocks = new HashSet<BasicBlock>();
+                _loopEndBlocks = new Stack<BasicBlock>();
+                if (prop.Setter.EntryBlock != null)
+                    GenerateStructuredBlock(prop.Setter.EntryBlock);
+                _currentFunction = null;
+                Unindent();
+                WriteLine("}");
+            }
+
+            Unindent();
+            WriteLine("}");
+        }
+
+        /// <summary>
+        /// Generate a method
+        /// </summary>
+        private void GenerateMethod(IRClass irClass, IRMethod method)
+        {
+            var access = MapAccessModifier(method.Access);
+            var staticMod = method.IsStatic ? "static " : "";
+            var virtualMod = method.IsVirtual && !method.IsOverride ? "virtual " : "";
+            var overrideMod = method.IsOverride ? "override " : "";
+            var sealedMod = method.IsSealed && method.IsOverride ? "sealed " : "";
+            var returnType = MapType(method.ReturnType);
+            var name = SanitizeName(method.Name);
+
+            // Generate parameter list
+            var paramList = "";
+            if (method.Implementation != null)
+            {
+                paramList = string.Join(", ", method.Implementation.Parameters.Select(p =>
+                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+            }
+
+            WriteLine($"{access} {staticMod}{sealedMod}{overrideMod}{virtualMod}{returnType} {name}({paramList})");
+            WriteLine("{");
+            Indent();
+
+            // Generate body
+            if (method.Implementation != null)
+            {
+                _currentFunction = method.Implementation;
+                InitializeFunctionContext(method.Implementation);
+                _processedBlocks = new HashSet<BasicBlock>();
+                _loopEndBlocks = new Stack<BasicBlock>();
+
+                // Declare locals
+                var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var localVar in method.Implementation.LocalVariables)
+                {
+                    var varName = GetValueName(localVar);
+                    if (declared.Add(varName))
+                    {
+                        var csharpType = MapType(localVar.Type);
+                        var defaultValue = GetDefaultValue(localVar.Type);
+                        WriteLine($"{csharpType} {varName} = {defaultValue};");
+                    }
+                }
+
+                if (method.Implementation.LocalVariables.Count > 0)
+                    WriteLine();
+
+                if (method.Implementation.EntryBlock != null)
+                    GenerateStructuredBlock(method.Implementation.EntryBlock);
+
+                _currentFunction = null;
+            }
+
+            Unindent();
+            WriteLine("}");
+        }
+
+        /// <summary>
+        /// Initialize function context for code generation
+        /// </summary>
+        private void InitializeFunctionContext(IRFunction function)
+        {
+            _valueNames.Clear();
+            _variableNameMap.Clear();
+            _declaredIdentifiers.Clear();
+            _tempDefsByName.Clear();
+            _useCounts.Clear();
+
+            // Track declared identifiers
+            foreach (var param in function.Parameters)
+                _declaredIdentifiers.Add(param.Name);
+
+            foreach (var local in function.LocalVariables)
+                _declaredIdentifiers.Add(local.Name);
+
+            if (_currentModule != null)
+            {
+                foreach (var g in _currentModule.GlobalVariables.Values)
+                    _declaredIdentifiers.Add(g.Name);
+            }
+
+            // Map parameters and locals
+            foreach (var param in function.Parameters)
+            {
+                var sanitized = SanitizeName(param.Name);
+                _valueNames[param] = sanitized;
+                _variableNameMap[param.Name] = sanitized;
+            }
+
+            foreach (var localVar in function.LocalVariables)
+            {
+                var sanitized = SanitizeName(localVar.Name);
+                _valueNames[localVar] = sanitized;
+                _variableNameMap[localVar.Name] = sanitized;
+            }
+
+            AnalyzeUseCounts(function);
+            BuildTempDefinitions(function);
+        }
+
+        /// <summary>
+        /// Map IR access modifier to C# string
+        /// </summary>
+        private string MapAccessModifier(AccessModifier access)
+        {
+            return access switch
+            {
+                AccessModifier.Public => "public",
+                AccessModifier.Private => "private",
+                AccessModifier.Protected => "protected",
+                AccessModifier.Friend => "internal",
+                _ => "private"
+            };
         }
 
         private void GenerateMainMethod()
@@ -212,10 +529,36 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var returnType = MapType(function.ReturnType);
             var functionName = SanitizeName(function.Name);
 
+            // Add generic type parameters if any
+            var genericParams = "";
+            if (function.GenericParameters != null && function.GenericParameters.Count > 0)
+            {
+                genericParams = "<" + string.Join(", ", function.GenericParameters) + ">";
+            }
+
             var parameters = string.Join(", ", function.Parameters.Select(p =>
                 $"{MapType(p.Type)} {GetValueName(p)}"));
 
-            WriteLine($"{_options.MethodAccessModifier} static {returnType} {functionName}({parameters})");
+            // Handle async and iterator modifiers
+            var asyncModifier = function.IsAsync ? "async " : "";
+            var actualReturnType = returnType;
+
+            if (function.IsAsync)
+            {
+                // Wrap return type in Task<T> or use Task for void
+                if (returnType == "void")
+                    actualReturnType = "Task";
+                else
+                    actualReturnType = $"Task<{returnType}>";
+            }
+            else if (function.IsIterator)
+            {
+                // Wrap return type in IEnumerable<T>
+                if (returnType != "void")
+                    actualReturnType = $"IEnumerable<{returnType}>";
+            }
+
+            WriteLine($"{_options.MethodAccessModifier} static {asyncModifier}{actualReturnType} {functionName}{genericParams}({parameters})");
 
             WriteLine("{");
             Indent();
@@ -792,7 +1135,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (instruction is IRStore or IRAssignment)
                 return true;
 
-            if (instruction is IRAlloca or IRPhi)
+            if (instruction is IRAlloca or IRPhi or IRAwait)
                 return false;
 
             if (instruction is IRCall call)
@@ -947,7 +1290,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                             return _stdLib.EmitCall(call.FunctionName, argExprs);
                         }
 
-                        var fn = SanitizeName(call.FunctionName);
+                        // Handle qualified names (e.g., "ClassName.MethodName") by sanitizing each part
+                        var fn = call.FunctionName.Contains(".")
+                            ? string.Join(".", call.FunctionName.Split('.').Select(SanitizeName))
+                            : SanitizeName(call.FunctionName);
                         var args = string.Join(", ", argExprs);
                         return $"{fn}({args})";
                     }
@@ -967,6 +1313,69 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         var target = MapType(cast.Type);
                         var expr = EmitExpression(cast.Value, stack, false);
                         return $"({target}){expr}";
+                    }
+
+                    case IRAwait awaitVal:
+                    {
+                        // Emit the await expression inline
+                        string innerExpr;
+                        if (awaitVal.Expression is IRCall call)
+                        {
+                            var argExprs = call.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
+
+                            // Check if this is a standard library function
+                            if (_stdLib.CanHandle(call.FunctionName))
+                            {
+                                foreach (var import in _stdLib.GetRequiredImports(call.FunctionName))
+                                {
+                                    _usings.Add(import);
+                                }
+                                innerExpr = _stdLib.EmitCall(call.FunctionName, argExprs);
+                            }
+                            else
+                            {
+                                var fn = SanitizeName(call.FunctionName);
+                                var args = string.Join(", ", argExprs);
+                                innerExpr = $"{fn}({args})";
+                            }
+                        }
+                        else
+                        {
+                            innerExpr = EmitExpression(awaitVal.Expression, stack, false);
+                        }
+                        return $"await {innerExpr}";
+                    }
+
+                    case IRNewObject newObj:
+                    {
+                        var className = SanitizeName(newObj.ClassName);
+                        var argExprs = newObj.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
+                        var args = string.Join(", ", argExprs);
+                        return $"new {className}({args})";
+                    }
+
+                    case IRInstanceMethodCall methodCall:
+                    {
+                        var obj = EmitExpression(methodCall.Object, stack, false);
+                        var methodName = SanitizeName(methodCall.MethodName);
+                        var argExprs = methodCall.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
+                        var args = string.Join(", ", argExprs);
+                        return $"{obj}.{methodName}({args})";
+                    }
+
+                    case IRBaseMethodCall baseCall:
+                    {
+                        var methodName = SanitizeName(baseCall.MethodName);
+                        var argExprs = baseCall.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
+                        var args = string.Join(", ", argExprs);
+                        return $"base.{methodName}({args})";
+                    }
+
+                    case IRFieldAccess fieldAccess:
+                    {
+                        var obj = EmitExpression(fieldAccess.Object, stack, false);
+                        var fieldName = SanitizeName(fieldAccess.FieldName);
+                        return $"{obj}.{fieldName}";
                     }
 
                     case IRAlloca alloca:
@@ -1123,6 +1532,39 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
+            // Check if this is an extern function call
+            if (_currentModule != null && _currentModule.IsExtern(functionName))
+            {
+                var externDecl = _currentModule.GetExtern(functionName);
+                if (externDecl != null && externDecl.HasImplementation("CSharp"))
+                {
+                    var impl = externDecl.GetImplementation("CSharp");
+                    var argsStr = string.Join(", ", argExprs);
+
+                    // Format: implementation string may contain {0}, {1} placeholders
+                    // Or it may be a direct method call like "System.IO.File.ReadAllText"
+                    string externCall;
+                    if (impl.Contains("{"))
+                    {
+                        externCall = string.Format(impl, argExprs);
+                    }
+                    else
+                    {
+                        externCall = $"{impl}({argsStr})";
+                    }
+
+                    if (hasReturn && IsNamedDestination(call))
+                    {
+                        var target = GetValueName(call);
+                        WriteLine($"{target} = {externCall};");
+                        return;
+                    }
+
+                    WriteLine($"{externCall};");
+                    return;
+                }
+            }
+
             // Check if this is a standard library function
             if (_stdLib.CanHandle(functionName))
             {
@@ -1148,7 +1590,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             // Regular function call
             var args = string.Join(", ", argExprs);
-            var sanitizedName = SanitizeName(functionName);
+            // Handle qualified names (e.g., "ClassName.MethodName") by sanitizing each part
+            var sanitizedName = functionName.Contains(".")
+                ? string.Join(".", functionName.Split('.').Select(SanitizeName))
+                : SanitizeName(functionName);
 
             // If this call is explicitly targeted at a declared variable, emit assignment.
             if (hasReturn && IsNamedDestination(call))
@@ -1171,6 +1616,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRReturn ret)
         {
+            // Iterator functions should not have return statements - they use yield break/yield return
+            if (_currentFunction?.IsIterator == true)
+            {
+                // Skip returns in iterator functions - they end naturally or via yield break
+                return;
+            }
+
             if (ret.Value != null)
             {
                 var value = EmitExpression(ret.Value);
@@ -1274,6 +1726,102 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 WriteLine($"// {comment.Text}");
         }
 
+        public void Visit(IRArrayAlloc arrayAlloc)
+        {
+            var elementType = MapType(arrayAlloc.ElementType);
+            WriteLine($"var {arrayAlloc.Name} = new {elementType}[{arrayAlloc.Size}];");
+        }
+
+        public void Visit(IRArrayStore arrayStore)
+        {
+            var arrayName = GetValueName(arrayStore.Array);
+            var indexVal = arrayStore.Index is IRConstant c ? c.Value.ToString() : GetValueName(arrayStore.Index);
+            var valueVal = arrayStore.Value is IRConstant vc ? EmitConstant(vc) : GetValueName(arrayStore.Value);
+            WriteLine($"{arrayName}[{indexVal}] = {valueVal};");
+        }
+
+        public void Visit(IRAwait awaitInst)
+        {
+            string exprVal;
+
+            // If the expression is an IRCall, emit the call inline with await
+            if (awaitInst.Expression is IRCall call)
+            {
+                var argExprs = call.Arguments.Select(EmitExpression).ToArray();
+                var argsStr = string.Join(", ", argExprs);
+                exprVal = $"{SanitizeName(call.FunctionName)}({argsStr})";
+            }
+            else
+            {
+                exprVal = awaitInst.Expression is IRConstant c ? EmitConstant(c) : GetValueName(awaitInst.Expression);
+            }
+
+            var resultType = MapType(awaitInst.Type);
+            WriteLine($"{resultType} {awaitInst.Name} = await {exprVal};");
+        }
+
+        public void Visit(IRYield yieldInst)
+        {
+            if (yieldInst.IsBreak)
+            {
+                WriteLine("yield break;");
+            }
+            else
+            {
+                var valueVal = yieldInst.Value is IRConstant c ? EmitConstant(c) : GetValueName(yieldInst.Value);
+                WriteLine($"yield return {valueVal};");
+            }
+        }
+
+        public void Visit(IRNewObject newObj)
+        {
+            var className = SanitizeName(newObj.ClassName);
+            var args = string.Join(", ", newObj.Arguments.Select(EmitExpression));
+            var type = MapType(newObj.Type);
+            WriteLine($"{type} {newObj.Name} = new {className}({args});");
+        }
+
+        public void Visit(IRInstanceMethodCall methodCall)
+        {
+            var obj = EmitExpression(methodCall.Object);
+            var methodName = SanitizeName(methodCall.MethodName);
+            var args = string.Join(", ", methodCall.Arguments.Select(EmitExpression));
+
+            if (methodCall.Type == null || methodCall.Type.Name == "Void")
+            {
+                WriteLine($"{obj}.{methodName}({args});");
+            }
+            else
+            {
+                var resultType = MapType(methodCall.Type);
+                WriteLine($"{resultType} {methodCall.Name} = {obj}.{methodName}({args});");
+            }
+        }
+
+        public void Visit(IRBaseMethodCall baseCall)
+        {
+            var methodName = SanitizeName(baseCall.MethodName);
+            var args = string.Join(", ", baseCall.Arguments.Select(EmitExpression));
+
+            if (baseCall.Type == null || baseCall.Type.Name == "Void")
+            {
+                WriteLine($"base.{methodName}({args});");
+            }
+            else
+            {
+                var resultType = MapType(baseCall.Type);
+                WriteLine($"{resultType} {baseCall.Name} = base.{methodName}({args});");
+            }
+        }
+
+        public void Visit(IRFieldAccess fieldAccess)
+        {
+            var obj = EmitExpression(fieldAccess.Object);
+            var fieldName = SanitizeName(fieldAccess.FieldName);
+            var type = MapType(fieldAccess.Type);
+            WriteLine($"{type} {fieldAccess.Name} = {obj}.{fieldName};");
+        }
+
         // ====================================================================
         // Helper Methods
         // ====================================================================
@@ -1303,8 +1851,38 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (type == null)
                 return "object";
 
+            // Handle tuple types
+            if (type.Kind == TypeKind.Tuple && type.TupleElementTypes.Count > 0)
+            {
+                var elements = new List<string>();
+                for (int i = 0; i < type.TupleElementTypes.Count; i++)
+                {
+                    var elementType = MapType(type.TupleElementTypes[i]);
+                    if (i < type.TupleElementNames.Count && !string.IsNullOrEmpty(type.TupleElementNames[i]))
+                    {
+                        elements.Add($"{elementType} {type.TupleElementNames[i]}");
+                    }
+                    else
+                    {
+                        elements.Add(elementType);
+                    }
+                }
+                return $"({string.Join(", ", elements)})";
+            }
+
+            // Handle nullable types
+            if (type.IsNullable && type.UnderlyingType != null)
+            {
+                var underlyingType = MapType(type.UnderlyingType);
+                return $"{underlyingType}?";
+            }
+
             if (_typeMap.TryGetValue(type.Name, out var csharpType))
+            {
+                if (type.IsNullable)
+                    return $"{csharpType}?";
                 return csharpType;
+            }
 
             if (type.Kind == TypeKind.Array && type.ElementType != null)
             {
@@ -1312,7 +1890,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return $"{elementType}[]";
             }
 
-            return type.Name;
+            return type.IsNullable ? $"{type.Name}?" : type.Name;
         }
 
         private string GetDefaultValue(TypeInfo type)

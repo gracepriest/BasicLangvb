@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using BasicLang.Compiler.CodeGen.CSharp;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
+using BasicLang.Compiler.CodeGen.LLVM;
+using BasicLang.Compiler.CodeGen.MSIL;
 
 namespace BasicLang.Compiler.CodeGen
 {
@@ -42,6 +44,28 @@ namespace BasicLang.Compiler.CodeGen
                 IndentSize = opts.IndentSize,
                 GenerateComments = opts.GenerateComments,
                 GenerateMainFunction = opts.GenerateMainMethod
+            }));
+
+            // Register LLVM backend
+            Register(TargetPlatform.LLVM, "LLVM", opts => new LLVMCodeGenerator(new LLVMCodeGenOptions
+            {
+                GenerateComments = opts.GenerateComments
+            }));
+            Register(TargetPlatform.LLVM, "llvm", opts => new LLVMCodeGenerator(new LLVMCodeGenOptions
+            {
+                GenerateComments = opts.GenerateComments
+            }));
+
+            // Register MSIL backend
+            Register(TargetPlatform.MSIL, "MSIL", opts => new MSILCodeGenerator(new MSILCodeGenOptions
+            {
+                GenerateComments = opts.GenerateComments,
+                AssemblyName = opts.ClassName ?? "GeneratedAssembly"
+            }));
+            Register(TargetPlatform.MSIL, "IL", opts => new MSILCodeGenerator(new MSILCodeGenOptions
+            {
+                GenerateComments = opts.GenerateComments,
+                AssemblyName = opts.ClassName ?? "GeneratedAssembly"
             }));
 
             _initialized = true;

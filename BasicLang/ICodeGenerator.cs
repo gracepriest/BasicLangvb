@@ -142,7 +142,15 @@ namespace BasicLang.Compiler.CodeGen
         public abstract void Visit(IRSwitch switchInst);
         public abstract void Visit(IRLabel label);
         public abstract void Visit(IRComment comment);
-        
+        public abstract void Visit(IRArrayAlloc arrayAlloc);
+        public abstract void Visit(IRArrayStore arrayStore);
+        public abstract void Visit(IRAwait awaitInst);
+        public abstract void Visit(IRYield yieldInst);
+        public abstract void Visit(IRNewObject newObj);
+        public abstract void Visit(IRInstanceMethodCall methodCall);
+        public abstract void Visit(IRBaseMethodCall baseCall);
+        public abstract void Visit(IRFieldAccess fieldAccess);
+
         /// <summary>
         /// Map IR type to target language type
         /// </summary>

@@ -18,6 +18,9 @@ namespace BasicLang.Compiler.IR
         private readonly Stack<LoopContext> _loopStack;
         private readonly Dictionary<string, Stack<IRVariable>> _variableVersions;
         private readonly Dictionary<string, IRVariable> _globalVariables;
+        private readonly Dictionary<string, IRAlloca> _locals;
+        private string _currentClassName;
+        private List<IRValue> _pendingBaseConstructorArgs;  // Temporary storage for base constructor args
 
         // For SSA construction
         private int _nextVersion = 0;
@@ -30,6 +33,7 @@ namespace BasicLang.Compiler.IR
             _loopStack = new Stack<LoopContext>();
             _variableVersions = new Dictionary<string, Stack<IRVariable>>();
             _globalVariables = new Dictionary<string, IRVariable>();
+            _locals = new Dictionary<string, IRAlloca>();
         }
 
         /// <summary>
@@ -153,6 +157,16 @@ namespace BasicLang.Compiler.IR
 
             _currentFunction = _module.CreateFunction(node.Name, returnType);
 
+            // Set async/iterator flags
+            _currentFunction.IsAsync = node.IsAsync;
+            _currentFunction.IsIterator = node.IsIterator;
+
+            // Copy generic parameters
+            foreach (var genericParam in node.GenericParameters)
+            {
+                _currentFunction.GenericParameters.Add(genericParam);
+            }
+
             // Create parameters
             foreach (var param in node.Parameters)
             {
@@ -201,6 +215,15 @@ namespace BasicLang.Compiler.IR
             var voidType = new TypeInfo("Void", TypeKind.Void);
 
             _currentFunction = _module.CreateFunction(node.Name, voidType);
+
+            // Set async flag
+            _currentFunction.IsAsync = node.IsAsync;
+
+            // Copy generic parameters
+            foreach (var genericParam in node.GenericParameters)
+            {
+                _currentFunction.GenericParameters.Add(genericParam);
+            }
 
             // Create parameters
             foreach (var param in node.Parameters)
@@ -345,12 +368,142 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(ClassNode node)
         {
-            // For now, we'll skip class generation
-            // Full class support requires more complex IR
+            // Create IR class structure
+            var irClass = new IRClass(node.Name)
+            {
+                BaseClass = node.BaseClass
+            };
+
+            // Copy generic parameters
+            foreach (var genericParam in node.GenericParameters)
+            {
+                irClass.GenericParameters.Add(genericParam);
+            }
+
+            foreach (var iface in node.Interfaces)
+            {
+                irClass.Interfaces.Add(iface);
+            }
+
+            _module.Classes[node.Name] = irClass;
+            _currentClassName = node.Name;
+
+            // Process members - they will populate the IRClass
             foreach (var member in node.Members)
             {
-                member.Accept(this);
+                if (member is VariableDeclarationNode varDecl)
+                {
+                    // Add as field
+                    var field = new IRField
+                    {
+                        Name = varDecl.Name,
+                        Type = _semanticAnalyzer.GetNodeType(varDecl),
+                        Access = MapAccessModifier(varDecl.Access),
+                        IsStatic = varDecl.IsStatic
+                    };
+                    irClass.Fields.Add(field);
+                }
+                else if (member is FunctionNode funcNode)
+                {
+                    // Process function and add as method
+                    member.Accept(this);
+
+                    var method = new IRMethod
+                    {
+                        Name = funcNode.Name,
+                        ReturnType = _semanticAnalyzer.GetNodeType(funcNode),
+                        Access = MapAccessModifier(funcNode.Access),
+                        IsStatic = funcNode.IsStatic,
+                        IsVirtual = funcNode.IsVirtual,
+                        IsOverride = funcNode.IsOverride,
+                        IsSealed = funcNode.IsSealed,
+                        Implementation = _module.Functions.LastOrDefault()
+                    };
+                    irClass.Methods.Add(method);
+                }
+                else if (member is SubroutineNode subNode)
+                {
+                    // Process subroutine and add as method
+                    member.Accept(this);
+
+                    var method = new IRMethod
+                    {
+                        Name = subNode.Name,
+                        ReturnType = new TypeInfo("Void", TypeKind.Void),
+                        Access = MapAccessModifier(subNode.Access),
+                        IsStatic = subNode.IsStatic,
+                        IsVirtual = subNode.IsVirtual,
+                        IsOverride = subNode.IsOverride,
+                        IsSealed = subNode.IsSealed,
+                        Implementation = _module.Functions.LastOrDefault()
+                    };
+                    irClass.Methods.Add(method);
+                }
+                else if (member is ConstructorNode ctorNode)
+                {
+                    // Process constructor - this also processes base constructor args
+                    _pendingBaseConstructorArgs = null;
+                    member.Accept(this);
+
+                    var ctor = new IRConstructor
+                    {
+                        Access = MapAccessModifier(ctorNode.Access),
+                        Implementation = _module.Functions.LastOrDefault()
+                    };
+
+                    // Use the base constructor args collected during constructor processing
+                    if (_pendingBaseConstructorArgs != null)
+                    {
+                        ctor.BaseConstructorArgs.AddRange(_pendingBaseConstructorArgs);
+                    }
+                    _pendingBaseConstructorArgs = null;
+
+                    irClass.Constructors.Add(ctor);
+                }
+                else if (member is PropertyNode propNode)
+                {
+                    // Process property
+                    var prop = new IRProperty
+                    {
+                        Name = propNode.Name,
+                        Type = propNode.PropertyType != null
+                            ? _semanticAnalyzer.GetNodeType(propNode)
+                            : new TypeInfo("Object", TypeKind.Class),
+                        Access = MapAccessModifier(propNode.Access),
+                        IsStatic = propNode.IsStatic,
+                        IsReadOnly = propNode.IsReadOnly,
+                        IsWriteOnly = propNode.IsWriteOnly
+                    };
+
+                    // Generate getter/setter methods
+                    member.Accept(this);
+
+                    // Find the generated getter/setter functions
+                    var getterName = $"{node.Name}.get_{propNode.Name}";
+                    var setterName = $"{node.Name}.set_{propNode.Name}";
+                    prop.Getter = _module.Functions.FirstOrDefault(f => f.Name == getterName);
+                    prop.Setter = _module.Functions.FirstOrDefault(f => f.Name == setterName);
+
+                    irClass.Properties.Add(prop);
+                }
+                else
+                {
+                    member.Accept(this);
+                }
             }
+
+            _currentClassName = null;
+        }
+
+        private AccessModifier MapAccessModifier(BasicLang.Compiler.AST.AccessModifier access)
+        {
+            return access switch
+            {
+                BasicLang.Compiler.AST.AccessModifier.Public => AccessModifier.Public,
+                BasicLang.Compiler.AST.AccessModifier.Private => AccessModifier.Private,
+                BasicLang.Compiler.AST.AccessModifier.Protected => AccessModifier.Protected,
+                _ => AccessModifier.Private
+            };
         }
 
         public void Visit(InterfaceNode node)
@@ -388,6 +541,535 @@ namespace BasicLang.Compiler.IR
             if (node.Method != null)
             {
                 node.Method.Accept(this);
+            }
+        }
+
+        public void Visit(ExternDeclarationNode node)
+        {
+            // Extern declarations are recorded in the module's extern table
+            // They don't generate code themselves - they're used when the extern is called
+            var externInfo = new IRExternDeclaration
+            {
+                Name = node.Name,
+                IsFunction = node.IsFunction,
+                ReturnType = node.ReturnType?.Name ?? "Void",
+                PlatformImplementations = new Dictionary<string, string>(node.PlatformImplementations)
+            };
+
+            // Add parameters
+            foreach (var param in node.Parameters)
+            {
+                externInfo.Parameters.Add(new IRParameter
+                {
+                    Name = param.Name,
+                    TypeName = param.Type?.Name ?? "Object"
+                });
+            }
+
+            _module.ExternDeclarations.Add(node.Name, externInfo);
+        }
+
+        public void Visit(ConstructorNode node)
+        {
+            // Generate constructor as a special method
+            var constructorName = _currentClassName != null ? $"{_currentClassName}__ctor" : "Constructor";
+            var returnType = new TypeInfo("Void", TypeKind.Void);
+
+            _currentFunction = _module.CreateFunction(constructorName, returnType);
+            _currentBlock = _currentFunction.CreateBlock("entry");
+
+            // Add parameters
+            foreach (var param in node.Parameters)
+            {
+                var paramType = _semanticAnalyzer.GetNodeType(param);
+                var irParam = new IRVariable(param.Name, paramType) { IsParameter = true };
+                _currentFunction.Parameters.Add(irParam);
+                PushVariableVersion(param.Name, irParam);
+            }
+
+            // Process base constructor arguments and store them for the IRConstructor
+            _pendingBaseConstructorArgs = new List<IRValue>();
+            if (node.BaseConstructorArgs.Count > 0)
+            {
+                foreach (var arg in node.BaseConstructorArgs)
+                {
+                    arg.Accept(this);
+                    if (_expressionResult != null)
+                    {
+                        _pendingBaseConstructorArgs.Add(_expressionResult);
+                    }
+                }
+            }
+
+            // Generate body
+            if (node.Body != null)
+            {
+                node.Body.Accept(this);
+            }
+
+            // Add return if not terminated
+            if (!_currentBlock.IsTerminated())
+            {
+                EmitInstruction(new IRReturn());
+            }
+
+            _currentFunction = null;
+            _currentBlock = null;
+        }
+
+        public void Visit(PropertyNode node)
+        {
+            var propertyType = node.PropertyType != null
+                ? _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Object", TypeKind.Class)
+                : new TypeInfo("Object", TypeKind.Class);
+
+            // Generate getter method
+            if (node.Getter != null)
+            {
+                var getterName = _currentClassName != null
+                    ? $"{_currentClassName}.get_{node.Name}"
+                    : $"get_{node.Name}";
+
+                _currentFunction = _module.CreateFunction(getterName, propertyType);
+                _currentBlock = _currentFunction.CreateBlock("entry");
+
+                node.Getter.Accept(this);
+
+                if (!_currentBlock.IsTerminated())
+                {
+                    EmitInstruction(new IRReturn());
+                }
+            }
+
+            // Generate setter method
+            if (node.Setter != null)
+            {
+                var setterName = _currentClassName != null
+                    ? $"{_currentClassName}.set_{node.Name}"
+                    : $"set_{node.Name}";
+
+                var voidType = new TypeInfo("Void", TypeKind.Void);
+                _currentFunction = _module.CreateFunction(setterName, voidType);
+                _currentBlock = _currentFunction.CreateBlock("entry");
+
+                // Add value parameter
+                var valueParam = new IRVariable("value", propertyType) { IsParameter = true };
+                _currentFunction.Parameters.Add(valueParam);
+                PushVariableVersion("value", valueParam);
+
+                node.Setter.Accept(this);
+
+                if (!_currentBlock.IsTerminated())
+                {
+                    EmitInstruction(new IRReturn());
+                }
+            }
+
+            _currentFunction = null;
+            _currentBlock = null;
+        }
+
+        public void Visit(MyBaseExpressionNode node)
+        {
+            // MyBase represents the base class instance
+            // For now, treat it as a special "this" reference for base class access
+            var baseType = _semanticAnalyzer.GetNodeType(node);
+            _expressionResult = new IRVariable("__base", baseType);
+        }
+
+        public void Visit(LambdaExpressionNode node)
+        {
+            // Generate a unique name for the lambda function
+            var lambdaName = $"__lambda_{_module.Functions.Count}";
+
+            // Determine return type
+            var returnType = node.IsFunction
+                ? (_semanticAnalyzer.GetNodeType(node.Body) ?? new TypeInfo("Object", TypeKind.Class))
+                : new TypeInfo("Void", TypeKind.Primitive);
+
+            // Create the lambda function
+            var lambdaFunc = new IRFunction(lambdaName, returnType);
+
+            // Add parameters
+            foreach (var param in node.Parameters)
+            {
+                var paramType = new TypeInfo(param.Type?.Name ?? "Object", TypeKind.Class);
+                var paramVar = new IRVariable(param.Name, paramType);
+                lambdaFunc.Parameters.Add(paramVar);
+            }
+
+            // Save current context
+            var savedFunction = _currentFunction;
+            var savedBlock = _currentBlock;
+            var savedLocals = new Dictionary<string, IRAlloca>(_locals);
+
+            // Set up lambda function context
+            _currentFunction = lambdaFunc;
+            _currentBlock = lambdaFunc.EntryBlock;
+            _locals.Clear();
+
+            // Allocate parameters as locals
+            foreach (var param in node.Parameters)
+            {
+                var paramType = new TypeInfo(param.Type?.Name ?? "Object", TypeKind.Class);
+                var alloca = new IRAlloca(param.Name, paramType);
+                _locals[param.Name] = alloca;
+                EmitInstruction(alloca);
+            }
+
+            // Generate body
+            if (node.Body != null)
+            {
+                node.Body.Accept(this);
+                // Return the expression result
+                EmitInstruction(new IRReturn(_expressionResult));
+            }
+            else if (node.StatementBody != null)
+            {
+                node.StatementBody.Accept(this);
+                // Ensure we have a return for void lambdas
+                if (!_currentBlock.IsTerminated())
+                {
+                    EmitInstruction(new IRReturn(null));
+                }
+            }
+
+            // Add lambda function to module
+            _module.Functions.Add(lambdaFunc);
+
+            // Restore context
+            _currentFunction = savedFunction;
+            _currentBlock = savedBlock;
+            _locals.Clear();
+            foreach (var kvp in savedLocals)
+            {
+                _locals[kvp.Key] = kvp.Value;
+            }
+
+            // The result is a reference to the lambda function
+            _expressionResult = new IRVariable(lambdaName, new TypeInfo("Delegate", TypeKind.Delegate));
+        }
+
+        public void Visit(CollectionInitializerNode node)
+        {
+            // Get the element type from semantic analysis
+            var arrayType = _semanticAnalyzer.GetNodeType(node) as TypeInfo;
+            var elementType = arrayType?.ElementType ?? new TypeInfo("Object", TypeKind.Class);
+
+            // Create a list to hold the element values
+            var elements = new List<IRValue>();
+
+            foreach (var element in node.Elements)
+            {
+                element.Accept(this);
+                elements.Add(_expressionResult);
+            }
+
+            // Create an array allocation IR
+            var tempName = _currentFunction.GetNextTempName();
+            var arrayAlloc = new IRArrayAlloc(tempName, elementType, elements.Count);
+            EmitInstruction(arrayAlloc);
+
+            // Store each element
+            for (int i = 0; i < elements.Count; i++)
+            {
+                var indexConst = new IRConstant(i, new TypeInfo("Integer", TypeKind.Primitive));
+                var store = new IRArrayStore(arrayAlloc, indexConst, elements[i]);
+                EmitInstruction(store);
+            }
+
+            _expressionResult = arrayAlloc;
+        }
+
+        public void Visit(TupleLiteralNode node)
+        {
+            // Get the tuple type from semantic analysis
+            var tupleType = _semanticAnalyzer.GetNodeType(node) as TypeInfo;
+
+            // Evaluate all tuple elements
+            var elementValues = new List<IRValue>();
+            foreach (var element in node.Elements)
+            {
+                element.Accept(this);
+                elementValues.Add(_expressionResult);
+            }
+
+            // Create a tuple IR node (represented as a call to tuple constructor)
+            var tempName = _currentFunction.GetNextTempName();
+            var tupleCall = new IRCall(
+                tempName,
+                "ValueTuple.Create",
+                tupleType ?? new TypeInfo("Object", TypeKind.Class)
+            );
+            foreach (var arg in elementValues)
+            {
+                tupleCall.Arguments.Add(arg);
+            }
+            EmitInstruction(tupleCall);
+            _expressionResult = tupleCall;
+        }
+
+        public void Visit(OperatorDeclarationNode node)
+        {
+            // Generate operator as a static method with special naming
+            var opMethodName = $"op_{GetOperatorMethodName(node.OperatorSymbol)}";
+            var returnType = new TypeInfo(node.ReturnType?.Name ?? "Object", TypeKind.Class);
+
+            var opFunc = new IRFunction(opMethodName, returnType);
+            // Operators are always static (handled at code generation)
+
+            // Add parameters
+            foreach (var param in node.Parameters)
+            {
+                var paramType = new TypeInfo(param.Type?.Name ?? "Object", TypeKind.Class);
+                var paramVar = new IRVariable(param.Name, paramType);
+                opFunc.Parameters.Add(paramVar);
+            }
+
+            // Save context and switch to operator function
+            var savedFunction = _currentFunction;
+            var savedBlock = _currentBlock;
+            var savedLocals = new Dictionary<string, IRAlloca>(_locals);
+
+            _currentFunction = opFunc;
+            _currentBlock = opFunc.EntryBlock;
+            _locals.Clear();
+
+            // Generate body
+            if (node.Body != null)
+            {
+                node.Body.Accept(this);
+            }
+
+            // Ensure return
+            if (!_currentBlock.IsTerminated())
+            {
+                EmitInstruction(new IRReturn(null));
+            }
+
+            _module.Functions.Add(opFunc);
+
+            // Restore context
+            _currentFunction = savedFunction;
+            _currentBlock = savedBlock;
+            _locals.Clear();
+            foreach (var kvp in savedLocals)
+            {
+                _locals[kvp.Key] = kvp.Value;
+            }
+        }
+
+        private string GetOperatorMethodName(string operatorSymbol)
+        {
+            return operatorSymbol switch
+            {
+                "+" => "Addition",
+                "-" => "Subtraction",
+                "*" => "Multiply",
+                "/" => "Division",
+                "\\" => "IntegerDivision",
+                "Mod" => "Modulus",
+                "^" => "Exponent",
+                "=" => "Equality",
+                "<>" => "Inequality",
+                "<" => "LessThan",
+                ">" => "GreaterThan",
+                "<=" => "LessThanOrEqual",
+                ">=" => "GreaterThanOrEqual",
+                "&" => "Concatenate",
+                "And" => "BitwiseAnd",
+                "Or" => "BitwiseOr",
+                "Xor" => "ExclusiveOr",
+                "Not" => "OnesComplement",
+                "IsTrue" => "True",
+                "IsFalse" => "False",
+                "CType" => "Implicit",
+                _ => operatorSymbol.Replace(" ", "")
+            };
+        }
+
+        public void Visit(EventDeclarationNode node)
+        {
+            // Events are handled as fields with delegate type at code generation
+            // No IR needed - they're part of class metadata
+            EmitInstruction(new IRComment($"Event: {node.Name}"));
+        }
+
+        public void Visit(RaiseEventStatementNode node)
+        {
+            // Evaluate arguments
+            var args = new List<IRValue>();
+            foreach (var arg in node.Arguments)
+            {
+                arg.Accept(this);
+                args.Add(_expressionResult);
+            }
+
+            // Generate call to event invocation
+            var eventCall = new IRCall(
+                _currentFunction.GetNextTempName(),
+                $"raise_{node.EventName}",
+                new TypeInfo("Void", TypeKind.Void)
+            );
+            foreach (var arg in args)
+            {
+                eventCall.Arguments.Add(arg);
+            }
+            EmitInstruction(eventCall);
+        }
+
+        public void Visit(AddHandlerStatementNode node)
+        {
+            // Evaluate event and handler expressions
+            node.EventExpression?.Accept(this);
+            var eventExpr = _expressionResult;
+
+            node.HandlerExpression?.Accept(this);
+            var handlerExpr = _expressionResult;
+
+            // Generate delegate combination call
+            var addCall = new IRCall(
+                _currentFunction.GetNextTempName(),
+                "Delegate.Combine",
+                new TypeInfo("Delegate", TypeKind.Delegate)
+            );
+            if (eventExpr != null) addCall.Arguments.Add(eventExpr);
+            if (handlerExpr != null) addCall.Arguments.Add(handlerExpr);
+            EmitInstruction(addCall);
+        }
+
+        public void Visit(RemoveHandlerStatementNode node)
+        {
+            // Evaluate event and handler expressions
+            node.EventExpression?.Accept(this);
+            var eventExpr = _expressionResult;
+
+            node.HandlerExpression?.Accept(this);
+            var handlerExpr = _expressionResult;
+
+            // Generate delegate removal call
+            var removeCall = new IRCall(
+                _currentFunction.GetNextTempName(),
+                "Delegate.Remove",
+                new TypeInfo("Delegate", TypeKind.Delegate)
+            );
+            if (eventExpr != null) removeCall.Arguments.Add(eventExpr);
+            if (handlerExpr != null) removeCall.Arguments.Add(handlerExpr);
+            EmitInstruction(removeCall);
+        }
+
+        public void Visit(TypePatternNode node)
+        {
+            // Type patterns are handled in the Select Case code generation
+            // The pattern generates a type check: If TypeOf expr Is Type Then
+            // For now, just ensure the When guard is evaluated if present
+            if (node.WhenGuard != null)
+            {
+                node.WhenGuard.Accept(this);
+            }
+        }
+
+        public void Visit(ConstantPatternNode node)
+        {
+            // Constant patterns generate equality checks
+            // Evaluate the constant value
+            node.Value?.Accept(this);
+
+            if (node.WhenGuard != null)
+            {
+                node.WhenGuard.Accept(this);
+            }
+        }
+
+        public void Visit(RangePatternNode node)
+        {
+            // Range patterns generate: lower <= expr AndAlso expr <= upper
+            node.LowerBound?.Accept(this);
+            var lowerValue = _expressionResult;
+
+            node.UpperBound?.Accept(this);
+            var upperValue = _expressionResult;
+
+            if (node.WhenGuard != null)
+            {
+                node.WhenGuard.Accept(this);
+            }
+        }
+
+        public void Visit(ComparisonPatternNode node)
+        {
+            // Comparison patterns generate: expr op value
+            node.Value?.Accept(this);
+
+            if (node.WhenGuard != null)
+            {
+                node.WhenGuard.Accept(this);
+            }
+        }
+
+        public void Visit(AwaitExpressionNode node)
+        {
+            IRValue taskExpr;
+
+            // Special handling for CallExpressionNode - don't emit it separately
+            // Instead, create the IRCall and embed it in the IRAwait
+            if (node.Expression is CallExpressionNode callNode)
+            {
+                string functionName = "";
+                if (callNode.Callee is IdentifierExpressionNode idExpr)
+                {
+                    functionName = idExpr.Name;
+                }
+                else if (callNode.Callee is MemberAccessExpressionNode memberExpr)
+                {
+                    functionName = $"{memberExpr.Object}.{memberExpr.MemberName}";
+                }
+
+                var returnType = _semanticAnalyzer.GetNodeType(callNode);
+                var tempName = _currentFunction.GetNextTempName();
+                var call = new IRCall(tempName, functionName, returnType);
+
+                // Evaluate arguments
+                foreach (var arg in callNode.Arguments)
+                {
+                    arg.Accept(this);
+                    call.Arguments.Add(_expressionResult);
+                }
+
+                // Don't emit the call - it will be part of the await
+                taskExpr = call;
+            }
+            else
+            {
+                // For non-call expressions, evaluate normally
+                node.Expression?.Accept(this);
+                taskExpr = _expressionResult;
+            }
+
+            // Generate IRAwait instruction
+            var resultName = _currentFunction.GetNextTempName();
+            var resultType = taskExpr?.Type ?? new TypeInfo("Object", TypeKind.Class);
+            var awaitInst = new IRAwait(resultName, taskExpr, resultType);
+            EmitInstruction(awaitInst);
+
+            _expressionResult = awaitInst;
+        }
+
+        public void Visit(YieldStatementNode node)
+        {
+            if (node.IsBreak)
+            {
+                // Yield Break - generate IRYield with IsBreak = true
+                EmitInstruction(new IRYield(null, isBreak: true));
+            }
+            else
+            {
+                // Yield Return - yield a value
+                node.Value?.Accept(this);
+                var yieldValue = _expressionResult;
+
+                // Generate IRYield instruction
+                EmitInstruction(new IRYield(yieldValue, isBreak: false));
             }
         }
 
@@ -695,6 +1377,26 @@ namespace BasicLang.Compiler.IR
             _currentBlock = endBlock;
         }
 
+        public void Visit(WithStatementNode node)
+        {
+            // Evaluate the With object expression
+            node.Object.Accept(this);
+            var withObject = _expressionResult;
+
+            // Store the object in a temporary variable for use in the body
+            var objType = _semanticAnalyzer.GetNodeType(node.Object) ?? new TypeInfo("Object", TypeKind.Class);
+            var withVar = CreateVariable("__with", objType, _nextVersion++);
+            EmitInstruction(new IRAssignment(withVar, withObject));
+
+            EmitInstruction(new IRComment("With block"));
+
+            // Process the body
+            // Note: Full implementation would need to track the With object for implicit member access
+            node.Body.Accept(this);
+
+            EmitInstruction(new IRComment("End With"));
+        }
+
         public void Visit(WhileLoopNode node)
         {
             var condBlock = _currentFunction.CreateBlock("while.cond");
@@ -822,8 +1524,23 @@ namespace BasicLang.Compiler.IR
                 var catchBlock = _currentFunction.CreateBlock("catch.body");
                 _currentBlock = catchBlock;
 
-                EmitInstruction(new IRComment($"Catch {catchClause.ExceptionType}"));
+                EmitInstruction(new IRComment($"Catch {catchClause.ExceptionType?.Name ?? "Exception"}"));
                 catchClause.Body.Accept(this);
+
+                if (!_currentBlock.IsTerminated())
+                {
+                    EmitInstruction(new IRBranch(endBlock));
+                }
+            }
+
+            // Finally block
+            if (node.FinallyBlock != null)
+            {
+                var finallyBlock = _currentFunction.CreateBlock("finally.body");
+                _currentBlock = finallyBlock;
+
+                EmitInstruction(new IRComment("Finally block"));
+                node.FinallyBlock.Accept(this);
 
                 if (!_currentBlock.IsTerminated())
                 {
@@ -837,6 +1554,17 @@ namespace BasicLang.Compiler.IR
         public void Visit(CatchClauseNode node)
         {
             // Handled in TryStatementNode
+        }
+
+        public void Visit(ThrowStatementNode node)
+        {
+            EmitInstruction(new IRComment("Throw exception"));
+            if (node.Exception != null)
+            {
+                node.Exception.Accept(this);
+                // In a real implementation, we would emit an IR instruction for throw
+                // For now, we just emit a comment as the backends will handle this specially
+            }
         }
 
         public void Visit(ReturnStatementNode node)
@@ -1029,6 +1757,65 @@ namespace BasicLang.Compiler.IR
             _expressionResult = new IRConstant(node.Value, type);
         }
 
+        public void Visit(InterpolatedStringNode node)
+        {
+            var stringType = new TypeInfo("String", TypeKind.Primitive);
+
+            // Build the string by concatenating all parts
+            IRValue result = null;
+
+            foreach (var part in node.Parts)
+            {
+                IRValue partValue;
+
+                if (part is string text)
+                {
+                    // Literal text part
+                    partValue = new IRConstant(text, stringType);
+                }
+                else if (part is ExpressionNode expr)
+                {
+                    // Expression part - evaluate and convert to string
+                    expr.Accept(this);
+                    var exprValue = _expressionResult;
+
+                    // If not already a string, convert to string
+                    var exprType = _semanticAnalyzer.GetNodeType(expr);
+                    if (exprType?.Name != "String")
+                    {
+                        var tempName = _currentFunction.GetNextTempName();
+                        var toStringCall = new IRCall(tempName, "ToString", stringType);
+                        toStringCall.Arguments.Add(exprValue);
+                        EmitInstruction(toStringCall);
+                        partValue = toStringCall;
+                    }
+                    else
+                    {
+                        partValue = exprValue;
+                    }
+                }
+                else
+                {
+                    continue;
+                }
+
+                // Concatenate with previous result
+                if (result == null)
+                {
+                    result = partValue;
+                }
+                else
+                {
+                    var tempName = _currentFunction.GetNextTempName();
+                    var concat = new IRBinaryOp(tempName, BinaryOpKind.Concat, result, partValue, stringType);
+                    EmitInstruction(concat);
+                    result = concat;
+                }
+            }
+
+            _expressionResult = result ?? new IRConstant("", stringType);
+        }
+
         public void Visit(IdentifierExpressionNode node)
         {
             // Look up variable
@@ -1041,54 +1828,123 @@ namespace BasicLang.Compiler.IR
             node.Object.Accept(this);
             var obj = _expressionResult;
 
-            // Generate GEP for member access
+            // Generate field access
             var memberType = _semanticAnalyzer.GetNodeType(node);
             var tempName = _currentFunction.GetNextTempName();
 
-            var gep = new IRGetElementPtr(tempName, obj, memberType);
-            EmitInstruction(new IRComment($"Access member: {node.MemberName}"));
-            EmitInstruction(gep);
+            var fieldAccess = new IRFieldAccess(tempName, obj, node.MemberName, memberType);
+            EmitInstruction(fieldAccess);
 
-            // Load from pointer
-            var loadTemp = _currentFunction.GetNextTempName();
-            var load = new IRLoad(loadTemp, gep, memberType);
-            EmitInstruction(load);
-
-            _expressionResult = load;
+            _expressionResult = fieldAccess;
         }
 
         public void Visit(CallExpressionNode node)
         {
-            string functionName = "";
-
-            if (node.Callee is IdentifierExpressionNode idExpr)
-            {
-                functionName = idExpr.Name;
-            }
-            else if (node.Callee is MemberAccessExpressionNode memberExpr)
-            {
-                functionName = $"{memberExpr.Object}.{memberExpr.MemberName}";
-            }
-
             var returnType = _semanticAnalyzer.GetNodeType(node);
-
-            // Create temp name for now - if this call is directly assigned to a variable,
-            // the assignment handler will rename it to the target variable
             var tempName = returnType != null && returnType.Name != "Void"
                 ? _currentFunction.GetNextTempName()
                 : null;
 
-            var call = new IRCall(tempName, functionName, returnType);
-
-            // Evaluate arguments
-            foreach (var arg in node.Arguments)
+            // Check for different call types
+            if (node.Callee is MemberAccessExpressionNode memberExpr)
             {
-                arg.Accept(this);
-                call.Arguments.Add(_expressionResult);
-            }
+                // Check if this is a MyBase call
+                if (memberExpr.Object is MyBaseExpressionNode)
+                {
+                    // Base class method call: MyBase.Method(args)
+                    var baseCall = new IRBaseMethodCall(tempName, memberExpr.MemberName, returnType);
 
-            EmitInstruction(call);
-            _expressionResult = call;
+                    foreach (var arg in node.Arguments)
+                    {
+                        arg.Accept(this);
+                        baseCall.Arguments.Add(_expressionResult);
+                    }
+
+                    EmitInstruction(baseCall);
+                    _expressionResult = baseCall;
+                    return;
+                }
+
+                // Check if this is an instance method call vs static method call
+                // Instance: obj.Method() where obj is a variable
+                // Static: ClassName.Method() where ClassName is a type
+                memberExpr.Object.Accept(this);
+                var obj = _expressionResult;
+
+                // Determine if this is a static call (type reference) or instance call (variable)
+                // Check if the object is a reference to a class type (static call) by:
+                // 1. It's an IRVariable with the EXACT name of a class (case-sensitive)
+                // 2. The identifier doesn't match a local variable in the current function
+                bool isStaticCall = false;
+                if (obj is IRVariable objVar)
+                {
+                    // Case-sensitive check: does the name exactly match a class name?
+                    bool exactClassMatch = _module.Classes.Keys.Any(k => k == objVar.Name);
+                    // Is this a local variable or parameter?
+                    bool isLocalOrParam = _currentFunction?.Parameters.Any(p => p.Name == objVar.Name) == true ||
+                                          _locals.ContainsKey(objVar.Name);
+
+                    // It's a static call only if it matches a class name exactly AND is not a local/param
+                    isStaticCall = exactClassMatch && !isLocalOrParam;
+                }
+
+                if (isStaticCall && obj is IRVariable staticVar)
+                {
+                    // Static method call: ClassName.Method()
+                    var call = new IRCall(tempName, $"{staticVar.Name}.{memberExpr.MemberName}", returnType);
+                    foreach (var arg in node.Arguments)
+                    {
+                        arg.Accept(this);
+                        call.Arguments.Add(_expressionResult);
+                    }
+                    EmitInstruction(call);
+                    _expressionResult = call;
+                }
+                else
+                {
+                    // Instance method call: obj.Method()
+                    var methodCall = new IRInstanceMethodCall(tempName, obj, memberExpr.MemberName, returnType);
+
+                    foreach (var arg in node.Arguments)
+                    {
+                        arg.Accept(this);
+                        methodCall.Arguments.Add(_expressionResult);
+                    }
+
+                    EmitInstruction(methodCall);
+                    _expressionResult = methodCall;
+                }
+            }
+            else if (node.Callee is IdentifierExpressionNode idExpr)
+            {
+                // Regular function call
+                var call = new IRCall(tempName, idExpr.Name, returnType);
+
+                foreach (var arg in node.Arguments)
+                {
+                    arg.Accept(this);
+                    call.Arguments.Add(_expressionResult);
+                }
+
+                EmitInstruction(call);
+                _expressionResult = call;
+            }
+            else
+            {
+                // Fallback
+                node.Callee.Accept(this);
+                var callee = _expressionResult;
+                var call = new IRCall(tempName, callee?.Name ?? "unknown", returnType);
+
+                foreach (var arg in node.Arguments)
+                {
+                    arg.Accept(this);
+                    call.Arguments.Add(_expressionResult);
+                }
+
+                EmitInstruction(call);
+                _expressionResult = call;
+            }
         }
 
         public void Visit(ArrayAccessExpressionNode node)
@@ -1120,19 +1976,20 @@ namespace BasicLang.Compiler.IR
         {
             var type = _semanticAnalyzer.GetNodeType(node);
             var tempName = _currentFunction.GetNextTempName();
+            var className = node.Type?.Name ?? "Object";
 
-            // Allocate memory
-            var alloca = new IRAlloca(tempName, type);
-            EmitInstruction(alloca);
+            // Create new object instruction
+            var newObj = new IRNewObject(tempName, className, type);
 
-            // Call constructor if there are arguments
-            if (node.Arguments.Count > 0)
+            // Evaluate arguments
+            foreach (var arg in node.Arguments)
             {
-                EmitInstruction(new IRComment("Constructor call"));
-                // Would need to generate constructor call here
+                arg.Accept(this);
+                newObj.Arguments.Add(_expressionResult);
             }
 
-            _expressionResult = alloca;
+            EmitInstruction(newObj);
+            _expressionResult = newObj;
         }
 
         public void Visit(CastExpressionNode node)

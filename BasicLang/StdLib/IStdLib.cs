@@ -9,10 +9,12 @@ namespace BasicLang.Compiler.StdLib
     public enum StdLibCategory
     {
         IO,
+        FileIO,
         String,
         Math,
         Array,
         Conversion,
+        DateTime,
         System
     }
 
@@ -128,5 +130,51 @@ namespace BasicLang.Compiler.StdLib
         string EmitCStr(string value);
         string EmitCBool(string value);
         string EmitCChar(string value);
+    }
+
+    /// <summary>
+    /// File I/O functions
+    /// </summary>
+    public interface IStdFileIO
+    {
+        // Simple file operations
+        string EmitFileRead(string path);
+        string EmitFileWrite(string path, string content);
+        string EmitFileAppend(string path, string content);
+        string EmitFileExists(string path);
+        string EmitFileDelete(string path);
+        string EmitFileCopy(string source, string dest);
+        string EmitFileMove(string source, string dest);
+
+        // Directory operations
+        string EmitDirExists(string path);
+        string EmitDirCreate(string path);
+        string EmitDirDelete(string path);
+        string EmitDirGetFiles(string path);
+        string EmitDirGetDirs(string path);
+
+        // Path operations
+        string EmitPathCombine(string path1, string path2);
+        string EmitPathGetFileName(string path);
+        string EmitPathGetDirectory(string path);
+        string EmitPathGetExtension(string path);
+    }
+
+    /// <summary>
+    /// Date/Time functions
+    /// </summary>
+    public interface IStdDateTime
+    {
+        string EmitNow();
+        string EmitToday();
+        string EmitYear(string date);
+        string EmitMonth(string date);
+        string EmitDay(string date);
+        string EmitHour(string date);
+        string EmitMinute(string date);
+        string EmitSecond(string date);
+        string EmitDateAdd(string date, string interval, string number);
+        string EmitDateDiff(string date1, string date2, string interval);
+        string EmitFormatDate(string date, string format);
     }
 }

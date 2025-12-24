@@ -1,5 +1,7 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace GeneratedCode
 {
@@ -7,8 +9,8 @@ namespace GeneratedCode
     {
         public static int SumNumbers(int n)
         {
-            int sum = default(int);
-            int i = default(int);
+            int sum = 0;
+            int i = 0;
 
             sum = 0;
             i = 1;
@@ -22,10 +24,9 @@ namespace GeneratedCode
 
         public static void Main()
         {
-            int total = default(int);
+            int total = 0;
 
             total = SumNumbers(100);
-            return;
         }
 
     }

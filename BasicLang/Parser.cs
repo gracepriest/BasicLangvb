@@ -78,12 +78,40 @@ namespace BasicLang.Compiler
                 return ParseDelegate();
             if (Check(TokenType.TypeDefine))
                 return ParseTypeDefine();
+            if (Check(TokenType.Extern))
+                return ParseExtern();
+            // Handle Async/Iterator modifiers for top-level functions/subs
+            if (Check(TokenType.Async) || Check(TokenType.Iterator))
+            {
+                bool isAsync = false;
+                bool isIterator = false;
+                while (Check(TokenType.Async) || Check(TokenType.Iterator))
+                {
+                    if (Match(TokenType.Async)) isAsync = true;
+                    if (Match(TokenType.Iterator)) isIterator = true;
+                }
+                if (Check(TokenType.Function))
+                {
+                    var func = ParseFunction();
+                    func.IsAsync = isAsync;
+                    func.IsIterator = isIterator;
+                    return func;
+                }
+                if (Check(TokenType.Sub))
+                {
+                    var sub = ParseSubroutine();
+                    sub.IsAsync = isAsync;
+                    return sub;
+                }
+            }
             if (Check(TokenType.Function))
                 return ParseFunction();
             if (Check(TokenType.Sub))
                 return ParseSubroutine();
             if (Check(TokenType.Dim))
                 return ParseVariableDeclaration();
+            if (Check(TokenType.Auto))
+                return ParseAutoDeclaration();
             if (Check(TokenType.Const))
                 return ParseConstantDeclaration();
 
@@ -140,6 +168,49 @@ namespace BasicLang.Compiler
 
         private ASTNode ParseModuleMember()
         {
+            // Handle attribute syntax <Extension>
+            if (Check(TokenType.LessThan))
+            {
+                Advance(); // consume <
+                if (Check(TokenType.Extension))
+                {
+                    Advance(); // consume Extension
+                    Consume(TokenType.GreaterThan, "Expected '>' after attribute");
+                    SkipNewlines();
+                    return ParseExtensionMethodFromAttribute();
+                }
+                // Skip other unrecognized attributes
+                while (!Check(TokenType.GreaterThan) && !IsAtEnd())
+                    Advance();
+                if (Check(TokenType.GreaterThan))
+                    Advance();
+                SkipNewlines();
+            }
+
+            // Handle Async/Iterator modifiers
+            if (Check(TokenType.Async) || Check(TokenType.Iterator))
+            {
+                bool isAsync = false;
+                bool isIterator = false;
+                while (Check(TokenType.Async) || Check(TokenType.Iterator))
+                {
+                    if (Match(TokenType.Async)) isAsync = true;
+                    if (Match(TokenType.Iterator)) isIterator = true;
+                }
+                if (Check(TokenType.Function))
+                {
+                    var func = ParseFunction();
+                    func.IsAsync = isAsync;
+                    func.IsIterator = isIterator;
+                    return func;
+                }
+                if (Check(TokenType.Sub))
+                {
+                    var sub = ParseSubroutine();
+                    sub.IsAsync = isAsync;
+                    return sub;
+                }
+            }
             if (Check(TokenType.Function))
                 return ParseFunction();
             if (Check(TokenType.Sub))
@@ -234,45 +305,290 @@ namespace BasicLang.Compiler
         private ASTNode ParseClassMember()
         {
             AccessModifier access = AccessModifier.Public;
+            bool isStatic = false;
+            bool isVirtual = false;
+            bool isOverride = false;
+            bool isAbstract = false;
+            bool isSealed = false;
+            bool isReadOnly = false;
+            bool isWriteOnly = false;
+            bool isAsync = false;
+            bool isIterator = false;
 
-            if (Check(TokenType.Public))
+            // Parse modifiers in any order
+            while (true)
             {
-                Advance();
-                access = AccessModifier.Public;
-            }
-            else if (Check(TokenType.Private))
-            {
-                Advance();
-                access = AccessModifier.Private;
-            }
-            else if (Check(TokenType.Protected))
-            {
-                Advance();
-                access = AccessModifier.Protected;
+                if (Check(TokenType.Public))
+                {
+                    Advance();
+                    access = AccessModifier.Public;
+                }
+                else if (Check(TokenType.Private))
+                {
+                    Advance();
+                    access = AccessModifier.Private;
+                }
+                else if (Check(TokenType.Protected))
+                {
+                    Advance();
+                    access = AccessModifier.Protected;
+                }
+                else if (Check(TokenType.Shared))
+                {
+                    Advance();
+                    isStatic = true;
+                }
+                else if (Check(TokenType.Overridable))
+                {
+                    Advance();
+                    isVirtual = true;
+                }
+                else if (Check(TokenType.Overrides))
+                {
+                    Advance();
+                    isOverride = true;
+                }
+                else if (Check(TokenType.MustOverride))
+                {
+                    Advance();
+                    isAbstract = true;
+                }
+                else if (Check(TokenType.NotOverridable))
+                {
+                    Advance();
+                    isSealed = true;
+                }
+                else if (Check(TokenType.ReadOnly))
+                {
+                    Advance();
+                    isReadOnly = true;
+                }
+                else if (Check(TokenType.WriteOnly))
+                {
+                    Advance();
+                    isWriteOnly = true;
+                }
+                else if (Check(TokenType.Async))
+                {
+                    Advance();
+                    isAsync = true;
+                }
+                else if (Check(TokenType.Iterator))
+                {
+                    Advance();
+                    isIterator = true;
+                }
+                else
+                {
+                    break;
+                }
             }
 
+            // Property declaration
+            if (Check(TokenType.Property))
+            {
+                var prop = ParseProperty();
+                prop.Access = access;
+                prop.IsStatic = isStatic;
+                prop.IsReadOnly = isReadOnly;
+                prop.IsWriteOnly = isWriteOnly;
+                return prop;
+            }
+
+            // Function declaration
             if (Check(TokenType.Function))
             {
                 var func = ParseFunction();
                 func.Access = access;
+                func.IsStatic = isStatic;
+                func.IsVirtual = isVirtual;
+                func.IsOverride = isOverride;
+                func.IsAbstract = isAbstract;
+                func.IsSealed = isSealed;
+                func.IsAsync = isAsync;
+                func.IsIterator = isIterator;
                 return func;
             }
 
+            // Sub declaration - could be constructor (Sub New)
             if (Check(TokenType.Sub))
             {
+                // Peek ahead to see if this is Sub New (constructor)
+                if (PeekNext().Type == TokenType.New)
+                {
+                    var ctor = ParseConstructor();
+                    ctor.Access = access;
+                    return ctor;
+                }
+
                 var sub = ParseSubroutine();
                 sub.Access = access;
+                sub.IsStatic = isStatic;
+                sub.IsVirtual = isVirtual;
+                sub.IsOverride = isOverride;
+                sub.IsSealed = isSealed;
+                sub.IsAsync = isAsync;
                 return sub;
             }
 
+            // Field declaration with Dim
             if (Check(TokenType.Dim))
             {
-                var var = ParseVariableDeclaration();
-                var.Access = access;
-                return var;
+                var field = ParseVariableDeclaration();
+                field.Access = access;
+                field.IsStatic = isStatic;
+                return field;
+            }
+
+            // Field declaration without Dim (e.g., "Private _name As String" or "Private items[10] As Integer")
+            // If we see an identifier followed by As or [ (array), it's a field
+            if (Check(TokenType.Identifier))
+            {
+                var nextType = PeekNext().Type;
+                if (nextType == TokenType.As || nextType == TokenType.LeftBracket)
+                {
+                    var token = Peek();
+                    var name = Advance().Value.ToString();
+
+                    // Parse array dimensions if present
+                    var arrayDimensions = new List<int>();
+                    while (Match(TokenType.LeftBracket))
+                    {
+                        if (Check(TokenType.IntegerLiteral))
+                        {
+                            arrayDimensions.Add(int.Parse(Advance().Value.ToString()));
+                        }
+                        Consume(TokenType.RightBracket, "Expected ']' after array dimension");
+                    }
+
+                    Consume(TokenType.As, "Expected 'As' in field declaration");
+
+                    var field = new VariableDeclarationNode(token.Line, token.Column)
+                    {
+                        Name = name,
+                        Type = ParseTypeReference(),
+                        Access = access,
+                        IsStatic = isStatic
+                    };
+
+                    // Add array dimensions to type
+                    if (arrayDimensions.Count > 0)
+                    {
+                        field.Type.ArrayDimensions = arrayDimensions;
+                    }
+
+                    // Optional initializer
+                    if (Match(TokenType.Equal))
+                    {
+                        field.Initializer = ParseExpression();
+                    }
+
+                    return field;
+                }
             }
 
             throw new ParseException($"Unexpected token in class: {Peek().Type}", Peek());
+        }
+
+        private ConstructorNode ParseConstructor()
+        {
+            var token = Consume(TokenType.Sub, "Expected 'Sub'");
+            Consume(TokenType.New, "Expected 'New'");
+            var node = new ConstructorNode(token.Line, token.Column);
+
+            // Parameters
+            if (Match(TokenType.LeftParen))
+            {
+                if (!Check(TokenType.RightParen))
+                {
+                    do
+                    {
+                        node.Parameters.Add(ParseParameter());
+                    } while (Match(TokenType.Comma));
+                }
+                Consume(TokenType.RightParen, "Expected ')' after parameters");
+            }
+
+            ConsumeNewlines();
+
+            // Check for MyBase.New() call as first statement
+            if (Check(TokenType.MyBase))
+            {
+                Advance();  // consume MyBase
+                Consume(TokenType.Dot, "Expected '.' after MyBase");
+                Consume(TokenType.New, "Expected 'New' after MyBase.");
+                Consume(TokenType.LeftParen, "Expected '(' after MyBase.New");
+
+                if (!Check(TokenType.RightParen))
+                {
+                    do
+                    {
+                        node.BaseConstructorArgs.Add(ParseExpression());
+                    } while (Match(TokenType.Comma));
+                }
+
+                Consume(TokenType.RightParen, "Expected ')' after arguments");
+                ConsumeNewlines();
+            }
+
+            // Parse body
+            node.Body = ParseBlock(TokenType.EndSub);
+            Consume(TokenType.EndSub, "Expected 'End Sub'");
+
+            return node;
+        }
+
+        private PropertyNode ParseProperty()
+        {
+            var token = Consume(TokenType.Property, "Expected 'Property'");
+            var node = new PropertyNode(token.Line, token.Column);
+
+            node.Name = Consume(TokenType.Identifier, "Expected property name").Lexeme;
+
+            // Property type
+            if (Match(TokenType.As))
+            {
+                node.PropertyType = ParseTypeReference();
+            }
+
+            ConsumeNewlines();
+
+            // Parse Get and Set blocks
+            while (!Check(TokenType.EndProperty) && !IsAtEnd())
+            {
+                if (Check(TokenType.Get))
+                {
+                    Consume(TokenType.Get, "Expected 'Get'");
+                    ConsumeNewlines();
+                    node.Getter = ParseBlock(TokenType.EndGet);
+                    Consume(TokenType.EndGet, "Expected 'End Get'");
+                    ConsumeNewlines();
+                }
+                else if (Check(TokenType.Set))
+                {
+                    Consume(TokenType.Set, "Expected 'Set'");
+
+                    // Optional setter parameter: Set(value As Type)
+                    if (Match(TokenType.LeftParen))
+                    {
+                        node.SetterParameter = ParseParameter();
+                        Consume(TokenType.RightParen, "Expected ')' after setter parameter");
+                    }
+
+                    ConsumeNewlines();
+                    node.Setter = ParseBlock(TokenType.EndSet);
+                    Consume(TokenType.EndSet, "Expected 'End Set'");
+                    ConsumeNewlines();
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            Consume(TokenType.EndProperty, "Expected 'End Property'");
+
+            return node;
         }
 
         private InterfaceNode ParseInterface()
@@ -285,9 +601,15 @@ namespace BasicLang.Compiler
 
             while (!Check(TokenType.EndInterface) && !IsAtEnd())
             {
-                if (Check(TokenType.Function) || Check(TokenType.Sub))
+                if (Check(TokenType.Function))
                 {
-                    var method = ParseFunction();
+                    var method = ParseInterfaceFunction();
+                    method.IsAbstract = true;
+                    node.Methods.Add(method);
+                }
+                else if (Check(TokenType.Sub))
+                {
+                    var method = ParseInterfaceSub();
                     method.IsAbstract = true;
                     node.Methods.Add(method);
                 }
@@ -295,6 +617,57 @@ namespace BasicLang.Compiler
             }
 
             Consume(TokenType.EndInterface, "Expected 'End Interface'");
+            return node;
+        }
+
+        private FunctionNode ParseInterfaceFunction()
+        {
+            var token = Consume(TokenType.Function, "Expected 'Function'");
+            var node = new FunctionNode(token.Line, token.Column);
+
+            node.Name = Consume(TokenType.Identifier, "Expected function name").Lexeme;
+
+            Consume(TokenType.LeftParen, "Expected '(' after function name");
+            if (!Check(TokenType.RightParen))
+            {
+                do
+                {
+                    node.Parameters.Add(ParseParameter());
+                } while (Match(TokenType.Comma));
+            }
+            Consume(TokenType.RightParen, "Expected ')' after parameters");
+
+            if (Match(TokenType.As))
+            {
+                node.ReturnType = ParseTypeReference();
+            }
+
+            // Interface methods have no body
+            ConsumeNewlines();
+            return node;
+        }
+
+        private FunctionNode ParseInterfaceSub()
+        {
+            var token = Consume(TokenType.Sub, "Expected 'Sub'");
+            var node = new FunctionNode(token.Line, token.Column);
+
+            node.Name = Consume(TokenType.Identifier, "Expected sub name").Lexeme;
+
+            Consume(TokenType.LeftParen, "Expected '(' after sub name");
+            if (!Check(TokenType.RightParen))
+            {
+                do
+                {
+                    node.Parameters.Add(ParseParameter());
+                } while (Match(TokenType.Comma));
+            }
+            Consume(TokenType.RightParen, "Expected ')' after parameters");
+
+            node.ReturnType = new TypeReference("Void");
+
+            // Interface methods have no body
+            ConsumeNewlines();
             return node;
         }
 
@@ -474,6 +847,112 @@ namespace BasicLang.Compiler
             return node;
         }
 
+        /// <summary>
+        /// Parse an extern declaration with platform-specific implementations
+        /// </summary>
+        /// <remarks>
+        /// Syntax:
+        /// Extern Function Name(params) As ReturnType
+        ///     CSharp: "implementation"
+        ///     Cpp: "implementation"
+        ///     LLVM: "implementation"
+        ///     MSIL: "implementation"
+        /// End Extern
+        ///
+        /// Or for Sub:
+        /// Extern Sub Name(params)
+        ///     CSharp: "implementation"
+        /// End Extern
+        /// </remarks>
+        private ExternDeclarationNode ParseExtern()
+        {
+            var token = Consume(TokenType.Extern, "Expected 'Extern'");
+            var node = new ExternDeclarationNode(token.Line, token.Column);
+
+            if (Match(TokenType.Function))
+            {
+                node.IsFunction = true;
+                node.Name = Consume(TokenType.Identifier, "Expected extern function name").Lexeme;
+
+                // Parse parameters
+                if (Match(TokenType.LeftParen))
+                {
+                    if (!Check(TokenType.RightParen))
+                    {
+                        do
+                        {
+                            node.Parameters.Add(ParseParameter());
+                        } while (Match(TokenType.Comma));
+                    }
+                    Consume(TokenType.RightParen, "Expected ')' after parameters");
+                }
+
+                // Parse return type
+                if (Match(TokenType.As))
+                {
+                    node.ReturnType = ParseTypeReference();
+                }
+            }
+            else if (Match(TokenType.Sub))
+            {
+                node.IsFunction = false;
+                node.Name = Consume(TokenType.Identifier, "Expected extern sub name").Lexeme;
+
+                // Parse parameters
+                if (Match(TokenType.LeftParen))
+                {
+                    if (!Check(TokenType.RightParen))
+                    {
+                        do
+                        {
+                            node.Parameters.Add(ParseParameter());
+                        } while (Match(TokenType.Comma));
+                    }
+                    Consume(TokenType.RightParen, "Expected ')' after parameters");
+                }
+            }
+            else
+            {
+                throw new ParseException("Expected 'Function' or 'Sub' after 'Extern'", Peek());
+            }
+
+            SkipNewlines();
+
+            // Parse platform implementations
+            // Format: PlatformName: "implementation string"
+            while (!Check(TokenType.EndExtern) && !IsAtEnd())
+            {
+                SkipNewlines();
+
+                if (Check(TokenType.EndExtern))
+                    break;
+
+                // Parse platform name (identifier followed by colon)
+                var platformToken = Consume(TokenType.Identifier, "Expected platform name (CSharp, Cpp, LLVM, MSIL)");
+                var platformName = platformToken.Lexeme;
+
+                Consume(TokenType.Colon, $"Expected ':' after platform name '{platformName}'");
+
+                // Parse implementation string
+                var implToken = Consume(TokenType.StringLiteral, $"Expected string literal for {platformName} implementation");
+                var implementation = implToken.Lexeme;
+
+                // Remove quotes from the string literal
+                if (implementation.StartsWith("\"") && implementation.EndsWith("\""))
+                {
+                    implementation = implementation.Substring(1, implementation.Length - 2);
+                }
+
+                node.PlatformImplementations[platformName] = implementation;
+
+                SkipNewlines();
+            }
+
+            Consume(TokenType.EndExtern, "Expected 'End Extern'");
+
+            return node;
+        }
+
         private ExtensionMethodNode ParseExtensionMethod()
         {
             var token = Consume(TokenType.Extension, "Expected 'Extension'");
@@ -483,6 +962,56 @@ namespace BasicLang.Compiler
 
             // Parse extended type (e.g., String.Reverse())
             node.ExtendedType = Consume(TokenType.Identifier, "Expected type name").Lexeme;
+            Consume(TokenType.Dot, "Expected '.' after type name");
+
+            var func = new FunctionNode(token.Line, token.Column);
+            func.Name = Consume(TokenType.Identifier, "Expected method name").Lexeme;
+
+            if (Match(TokenType.LeftParen))
+            {
+                if (!Check(TokenType.RightParen))
+                {
+                    do
+                    {
+                        func.Parameters.Add(ParseParameter());
+                    } while (Match(TokenType.Comma));
+                }
+                Consume(TokenType.RightParen, "Expected ')' after parameters");
+            }
+
+            if (Match(TokenType.As))
+            {
+                func.ReturnType = ParseTypeReference();
+            }
+
+            ConsumeNewlines();
+            func.Body = ParseBlock(TokenType.EndFunction);
+            Consume(TokenType.EndFunction, "Expected 'End Function'");
+
+            node.Method = func;
+            return node;
+        }
+
+        private ExtensionMethodNode ParseExtensionMethodFromAttribute()
+        {
+            // Called after <Extension> attribute is consumed
+            var token = Consume(TokenType.Function, "Expected 'Function' after <Extension>");
+            var node = new ExtensionMethodNode(token.Line, token.Column);
+
+            // Parse extended type (e.g., String.Reverse()) - can be identifier or type keyword
+            if (Check(TokenType.Identifier))
+            {
+                node.ExtendedType = Advance().Lexeme;
+            }
+            else if (Check(TokenType.String) || Check(TokenType.Integer) || Check(TokenType.Double) ||
+                     Check(TokenType.Boolean) || Check(TokenType.Long) || Check(TokenType.Single))
+            {
+                node.ExtendedType = Advance().Lexeme;
+            }
+            else
+            {
+                throw new ParseException($"Expected type name but found {Peek().Type}", Peek());
+            }
             Consume(TokenType.Dot, "Expected '.' after type name");
 
             var func = new FunctionNode(token.Line, token.Column);
@@ -523,6 +1052,18 @@ namespace BasicLang.Compiler
             var node = new FunctionNode(token.Line, token.Column);
 
             node.Name = Consume(TokenType.Identifier, "Expected function name").Lexeme;
+
+            // Generic type parameters: Function Foo(Of T, U)(...)
+            if (Check(TokenType.LeftParen) && PeekNext().Type == TokenType.Of)
+            {
+                Advance(); // consume '('
+                Consume(TokenType.Of, "Expected 'Of'");
+                do
+                {
+                    node.GenericParameters.Add(Consume(TokenType.Identifier, "Expected type parameter").Lexeme);
+                } while (Match(TokenType.Comma));
+                Consume(TokenType.RightParen, "Expected ')' after generic parameters");
+            }
 
             // Parameters
             if (Match(TokenType.LeftParen))
@@ -569,6 +1110,18 @@ namespace BasicLang.Compiler
             var node = new SubroutineNode(token.Line, token.Column);
 
             node.Name = Consume(TokenType.Identifier, "Expected subroutine name").Lexeme;
+
+            // Generic type parameters: Sub Foo(Of T, U)(...)
+            if (Check(TokenType.LeftParen) && PeekNext().Type == TokenType.Of)
+            {
+                Advance(); // consume '('
+                Consume(TokenType.Of, "Expected 'Of'");
+                do
+                {
+                    node.GenericParameters.Add(Consume(TokenType.Identifier, "Expected type parameter").Lexeme);
+                } while (Match(TokenType.Comma));
+                Consume(TokenType.RightParen, "Expected ')' after generic parameters");
+            }
 
             // Parameters
             if (Match(TokenType.LeftParen))
@@ -775,9 +1328,11 @@ namespace BasicLang.Compiler
 
             type = new TypeReference(typeName);
 
-            // Generic arguments
-            if (Match(TokenType.LeftParen) && Check(TokenType.Of))
+            // Generic arguments - only if we see '(' followed by 'Of'
+            // Check both before consuming the paren
+            if (Check(TokenType.LeftParen) && PeekNext().Type == TokenType.Of)
             {
+                Advance();  // consume '('
                 Consume(TokenType.Of, "Expected 'Of'");
                 do
                 {
@@ -785,6 +1340,12 @@ namespace BasicLang.Compiler
                 } while (Match(TokenType.Comma));
 
                 Consume(TokenType.RightParen, "Expected ')' after generic arguments");
+            }
+
+            // Nullable type: Integer?
+            if (Match(TokenType.QuestionMark))
+            {
+                type.IsNullable = true;
             }
 
             return type;
@@ -833,6 +1394,10 @@ namespace BasicLang.Compiler
                 return ParseDoLoop();
             if (Check(TokenType.Try))
                 return ParseTryStatement();
+            if (Check(TokenType.With))
+                return ParseWithStatement();
+            if (Check(TokenType.Throw))
+                return ParseThrowStatement();
             if (Check(TokenType.Return))
                 return ParseReturnStatement();
             if (Check(TokenType.Exit))
@@ -843,9 +1408,38 @@ namespace BasicLang.Compiler
                 return ParseAutoDeclaration();
             if (Check(TokenType.Const))
                 return ParseConstantDeclaration();
+            if (Check(TokenType.Yield))
+                return ParseYieldStatement();
 
             // Assignment or expression statement
             return ParseAssignmentOrExpressionStatement();
+        }
+
+        private YieldStatementNode ParseYieldStatement()
+        {
+            var token = Consume(TokenType.Yield, "Expected 'Yield'");
+            var node = new YieldStatementNode(token.Line, token.Column);
+
+            // Check for Yield Break (for exiting an iterator)
+            // Note: VB.NET doesn't have Yield Break, but we support it as an extension
+            if (Check(TokenType.Exit))
+            {
+                Advance();
+                node.IsBreak = true;
+            }
+            else if (Check(TokenType.Return))
+            {
+                // Yield Return value
+                Advance();
+                node.Value = ParseExpression();
+            }
+            else if (!Check(TokenType.Newline) && !IsAtEnd())
+            {
+                // Yield value (without Return keyword)
+                node.Value = ParseExpression();
+            }
+
+            return node;
         }
 
         private IfStatementNode ParseIfStatement()
@@ -1096,7 +1690,7 @@ namespace BasicLang.Compiler
             var node = new TryStatementNode(token.Line, token.Column);
 
             ConsumeNewlines();
-            node.TryBlock = ParseBlock(TokenType.Catch, TokenType.EndTry);
+            node.TryBlock = ParseBlock(TokenType.Catch, TokenType.Finally, TokenType.EndTry);
 
             while (Check(TokenType.Catch))
             {
@@ -1104,7 +1698,28 @@ namespace BasicLang.Compiler
                 node.CatchClauses.Add(catchClause);
             }
 
+            if (Check(TokenType.Finally))
+            {
+                Advance(); // consume Finally
+                ConsumeNewlines();
+                node.FinallyBlock = ParseBlock(TokenType.EndTry);
+            }
+
             Consume(TokenType.EndTry, "Expected 'End Try'");
+            return node;
+        }
+
+        private WithStatementNode ParseWithStatement()
+        {
+            var token = Consume(TokenType.With, "Expected 'With'");
+            var node = new WithStatementNode(token.Line, token.Column);
+
+            node.Object = ParseExpression();
+            ConsumeNewlines();
+
+            node.Body = ParseBlock(TokenType.EndWith);
+            Consume(TokenType.EndWith, "Expected 'End With'");
+
             return node;
         }
 
@@ -1113,12 +1728,32 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Catch, "Expected 'Catch'");
             var node = new CatchClauseNode(token.Line, token.Column);
 
-            node.ExceptionVariable = Consume(TokenType.Identifier, "Expected exception variable").Lexeme;
-            Consume(TokenType.As, "Expected 'As'");
-            node.ExceptionType = ParseTypeReference();
+            // Optional exception variable
+            if (Check(TokenType.Identifier))
+            {
+                node.ExceptionVariable = Advance().Lexeme;
+                if (Check(TokenType.As))
+                {
+                    Advance();
+                    node.ExceptionType = ParseTypeReference();
+                }
+            }
 
             ConsumeNewlines();
-            node.Body = ParseBlock(TokenType.Catch, TokenType.EndTry);
+            node.Body = ParseBlock(TokenType.Catch, TokenType.Finally, TokenType.EndTry);
+
+            return node;
+        }
+
+        private ThrowStatementNode ParseThrowStatement()
+        {
+            var token = Consume(TokenType.Throw, "Expected 'Throw'");
+            var node = new ThrowStatementNode(token.Line, token.Column);
+
+            if (!Check(TokenType.Newline) && !IsAtEnd())
+            {
+                node.Exception = ParseExpression();
+            }
 
             return node;
         }
@@ -1205,11 +1840,24 @@ namespace BasicLang.Compiler
         }
 
         /// <summary>
-        /// Parse a potential assignment target: identifier, member access, or array access.
+        /// Parse a potential assignment target: identifier, member access, array access,
+        /// or prefix increment/decrement.
         /// Does NOT consume '=' as equality.
         /// </summary>
         private ExpressionNode ParseAssignmentTarget()
         {
+            // Handle prefix increment/decrement as expression statements
+            if (Check(TokenType.Increment) || Check(TokenType.Decrement))
+            {
+                var op = Advance();
+                var operand = ParsePostfix();
+                var unary = new UnaryExpressionNode(op.Line, op.Column);
+                unary.Operator = op.Lexeme;
+                unary.Operand = operand;
+                unary.IsPostfix = false;
+                return unary;
+            }
+
             return ParsePostfix();
         }
 
@@ -1399,8 +2047,21 @@ namespace BasicLang.Compiler
 
         private ExpressionNode ParseUnary()
         {
+            // Prefix operators: Not, !, -, +
             if (Check(TokenType.Not) || Check(TokenType.Bang) ||
                 Check(TokenType.Minus) || Check(TokenType.Plus))
+            {
+                var op = Advance();
+                var operand = ParseUnary();
+                var unary = new UnaryExpressionNode(op.Line, op.Column);
+                unary.Operator = op.Lexeme;
+                unary.Operand = operand;
+                unary.IsPostfix = false;
+                return unary;
+            }
+
+            // Prefix increment/decrement: ++x, --y
+            if (Check(TokenType.Increment) || Check(TokenType.Decrement))
             {
                 var op = Advance();
                 var operand = ParseUnary();
@@ -1431,7 +2092,21 @@ namespace BasicLang.Compiler
                 }
                 else if (Match(TokenType.Dot))
                 {
-                    var member = Consume(TokenType.Identifier, "Expected member name").Lexeme;
+                    // Allow identifiers and keywords as member names (e.g., obj.Property, obj.Value)
+                    var memberToken = Peek();
+                    string member;
+                    if (Check(TokenType.Identifier))
+                    {
+                        member = Advance().Lexeme;
+                    }
+                    else if (IsKeywordUsableAsMemberName(memberToken.Type))
+                    {
+                        member = Advance().Lexeme;
+                    }
+                    else
+                    {
+                        throw new ParseException($"Expected member name but found {memberToken.Type}", memberToken);
+                    }
                     var memberAccess = new MemberAccessExpressionNode(expr.Line, expr.Column);
                     memberAccess.Object = expr;
                     memberAccess.MemberName = member;
@@ -1499,6 +2174,12 @@ namespace BasicLang.Compiler
                 return literal;
             }
 
+            // Interpolated string: $"Hello {name}"
+            if (Check(TokenType.InterpolatedStringLiteral))
+            {
+                return ParseInterpolatedString();
+            }
+
             // New expression
             if (Match(TokenType.New))
             {
@@ -1532,11 +2213,45 @@ namespace BasicLang.Compiler
                 return unary;
             }
 
+            // Await expression: Await SomeAsyncMethod()
+            if (Match(TokenType.Await))
+            {
+                var token = Previous();
+                var awaitExpr = new AwaitExpressionNode(token.Line, token.Column);
+                awaitExpr.Expression = ParseUnary();  // Parse the expression to await
+                return awaitExpr;
+            }
+
+            // Lambda expression: Function(x) expr or Sub(x) statement
+            if (Check(TokenType.Function) || Check(TokenType.Sub))
+            {
+                bool isFunction = Check(TokenType.Function);
+                var token = Advance();
+
+                // Check if this is a lambda (followed by open paren)
+                if (Check(TokenType.LeftParen))
+                {
+                    return ParseLambdaExpression(token, isFunction);
+                }
+                else
+                {
+                    // Put the token back and let normal parsing handle it
+                    _current--;
+                }
+            }
+
             // Me (this)
             if (Match(TokenType.Me))
             {
                 var token = Previous();
                 return new IdentifierExpressionNode(token.Line, token.Column) { Name = "Me" };
+            }
+
+            // MyBase (base class reference)
+            if (Match(TokenType.MyBase))
+            {
+                var token = Previous();
+                return new MyBaseExpressionNode(token.Line, token.Column);
             }
 
             // Identifier
@@ -1554,31 +2269,146 @@ namespace BasicLang.Compiler
                 return expr;
             }
 
-            // Array initializer
+            // Collection initializer: { 1, 2, 3 }
             if (Match(TokenType.LeftBrace))
             {
                 var token = Previous();
-                var call = new CallExpressionNode(token.Line, token.Column);
-                call.Callee = new IdentifierExpressionNode(token.Line, token.Column) { Name = "ArrayInit" };
+                var node = new CollectionInitializerNode(token.Line, token.Column);
 
                 if (!Check(TokenType.RightBrace))
                 {
                     do
                     {
-                        call.Arguments.Add(ParseExpression());
+                        node.Elements.Add(ParseExpression());
                     } while (Match(TokenType.Comma));
                 }
 
-                Consume(TokenType.RightBrace, "Expected '}' after array initializer");
-                return call;
+                Consume(TokenType.RightBrace, "Expected '}' after collection initializer");
+                return node;
             }
 
             throw new ParseException($"Unexpected token in expression: {Peek().Type}", Peek());
         }
 
+        private InterpolatedStringNode ParseInterpolatedString()
+        {
+            var token = Advance(); // consume the InterpolatedStringLiteral token
+            var node = new InterpolatedStringNode(token.Line, token.Column);
+
+            // The token.Value contains the raw string content like "Hello {name}, age {age}"
+            string content = token.Value?.ToString() ?? "";
+
+            // Parse the content into parts
+            int i = 0;
+            var currentText = new System.Text.StringBuilder();
+
+            while (i < content.Length)
+            {
+                if (content[i] == '{')
+                {
+                    // Save any accumulated text
+                    if (currentText.Length > 0)
+                    {
+                        node.Parts.Add(currentText.ToString());
+                        currentText.Clear();
+                    }
+
+                    // Find matching closing brace
+                    int braceDepth = 1;
+                    int start = i + 1;
+                    i++;
+                    while (i < content.Length && braceDepth > 0)
+                    {
+                        if (content[i] == '{') braceDepth++;
+                        else if (content[i] == '}') braceDepth--;
+                        if (braceDepth > 0) i++;
+                    }
+
+                    // Extract the expression text
+                    string exprText = content.Substring(start, i - start);
+                    i++; // skip the closing brace
+
+                    // Parse the expression
+                    var exprLexer = new Lexer(exprText);
+                    var exprTokens = exprLexer.Tokenize();
+                    var exprParser = new Parser(exprTokens);
+                    var expr = exprParser.ParseExpression();
+                    node.Parts.Add(expr);
+                }
+                else
+                {
+                    currentText.Append(content[i]);
+                    i++;
+                }
+            }
+
+            // Add any remaining text
+            if (currentText.Length > 0)
+            {
+                node.Parts.Add(currentText.ToString());
+            }
+
+            return node;
+        }
+
+        private LambdaExpressionNode ParseLambdaExpression(Token token, bool isFunction)
+        {
+            var lambda = new LambdaExpressionNode(token.Line, token.Column);
+            lambda.IsFunction = isFunction;
+
+            // Parse parameters
+            Consume(TokenType.LeftParen, "Expected '(' after Function/Sub in lambda");
+
+            if (!Check(TokenType.RightParen))
+            {
+                do
+                {
+                    var param = new ParameterNode(Peek().Line, Peek().Column);
+                    param.Name = Consume(TokenType.Identifier, "Expected parameter name").Lexeme;
+
+                    if (Match(TokenType.As))
+                    {
+                        param.Type = ParseTypeReference();
+                    }
+
+                    lambda.Parameters.Add(param);
+                } while (Match(TokenType.Comma));
+            }
+
+            Consume(TokenType.RightParen, "Expected ')' after lambda parameters");
+
+            // Optional return type for Function lambdas
+            if (isFunction && Match(TokenType.As))
+            {
+                lambda.ReturnType = ParseTypeReference();
+            }
+
+            // Parse body - expression lambda (single expression on same line)
+            lambda.Body = ParseExpression();
+
+            return lambda;
+        }
+
         // ====================================================================
         // Utility Methods
         // ====================================================================
+
+        private bool IsKeywordUsableAsMemberName(TokenType type)
+        {
+            // Keywords that can be used as member names after a dot
+            // Only include tokens that actually exist in TokenType
+            return type == TokenType.Property ||
+                   type == TokenType.Type ||
+                   type == TokenType.New ||
+                   type == TokenType.Get ||
+                   type == TokenType.Set ||
+                   type == TokenType.Me ||
+                   type == TokenType.Len ||
+                   type == TokenType.String ||
+                   type == TokenType.Integer ||
+                   type == TokenType.Double ||
+                   type == TokenType.Boolean;
+        }
 
         private bool Check(TokenType type)
         {
@@ -1608,6 +2438,12 @@ namespace BasicLang.Compiler
         private Token Peek()
         {
             return _tokens[_current];
+        }
+
+        private Token PeekNext()
+        {
+            if (_current + 1 >= _tokens.Count) return _tokens[_current];
+            return _tokens[_current + 1];
         }
 
         private Token Previous()

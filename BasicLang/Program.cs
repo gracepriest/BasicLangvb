@@ -1,13 +1,21 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using BasicLang.Compiler;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler.CodeGen;
 using BasicLang.Compiler.CodeGen.CSharp;
 using BasicLang.Compiler.CodeGen.CPlusPlus;
+using BasicLang.Compiler.CodeGen.LLVM;
+using BasicLang.Compiler.CodeGen.MSIL;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.IR.Optimization;
+using BasicLang.Compiler.LSP;
+using BasicLang.Compiler.Repl;
 using BasicLang.Compiler.SemanticAnalysis;
+using BasicLang.Compiler.StdLib;
+using BasicLang.Debugger;
 
 namespace BasicLang.Compiler.Driver
 {
@@ -16,8 +24,46 @@ namespace BasicLang.Compiler.Driver
     /// </summary>
     class Program
     {
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
+            // Check for LSP mode
+            if (args.Contains("--lsp") || args.Contains("--language-server"))
+            {
+                var server = new BasicLangLanguageServer();
+                await server.RunAsync();
+                return;
+            }
+
+            // Check for Debug Adapter mode
+            if (args.Contains("--debug-adapter") || args.Contains("--dap"))
+            {
+                var debugSession = new DebugSession(Console.OpenStandardInput(), Console.OpenStandardOutput());
+                await debugSession.RunAsync();
+                return;
+            }
+
+            // Check for REPL mode
+            if (args.Contains("--repl") || args.Contains("-i") || args.Contains("--interactive"))
+            {
+                var repl = new BasicLangRepl();
+                repl.Run();
+                return;
+            }
+
+            // Check for help
+            if (args.Contains("--help") || args.Contains("-h"))
+            {
+                PrintUsage();
+                return;
+            }
+
+            // Check for parser tests
+            if (args.Contains("--parser-tests"))
+            {
+                BasicLang.Test.ParserTests.Run();
+                return;
+            }
+
             Console.WriteLine("=".PadRight(70, '='));
             Console.WriteLine("BasicLang Multi-Target Transpiler - Complete Pipeline Demo");
             Console.WriteLine("=".PadRight(70, '='));
@@ -37,9 +83,38 @@ namespace BasicLang.Compiler.Driver
             DemoExitStatements();
             DemoDoLoopVariations();
             DemoRandomNumbers();
+            DemoCppBackend();
+            DemoLLVMBackend();
+            DemoMSILBackend();
+            DemoStdLibAbstraction();
+            DemoPlatformExterns();
+            DemoOOPFeatures();
+            DemoAdvancedFeatures();
+            DemoAsyncAndIterators();
 
             Console.WriteLine();
-            Console.WriteLine("Demo complete! Check the generated C# files in GeneratedCode folder.");
+            Console.WriteLine("Demo complete! Check the generated files in GeneratedCode folder.");
+        }
+
+        static void PrintUsage()
+        {
+            Console.WriteLine("BasicLang Compiler");
+            Console.WriteLine("==================");
+            Console.WriteLine();
+            Console.WriteLine("Usage: basiclang [options] [source.bas]");
+            Console.WriteLine();
+            Console.WriteLine("Options:");
+            Console.WriteLine("  --repl, -i      Start interactive REPL");
+            Console.WriteLine("  --lsp           Start Language Server Protocol mode");
+            Console.WriteLine("  --help, -h      Show this help message");
+            Console.WriteLine("  --target=X      Target backend (csharp, cpp, llvm, msil)");
+            Console.WriteLine("  --output=FILE   Output file path");
+            Console.WriteLine();
+            Console.WriteLine("Examples:");
+            Console.WriteLine("  basiclang --repl                    Start interactive mode");
+            Console.WriteLine("  basiclang --lsp                     Start LSP server for IDE");
+            Console.WriteLine("  basiclang program.bas               Compile program.bas");
+            Console.WriteLine("  basiclang --target=cpp program.bas  Compile to C++");
         }
 
         // ====================================================================
@@ -617,6 +692,929 @@ End Sub
         }
 
         // ====================================================================
+        // Demo 14: C++ Backend
+        // ====================================================================
+
+        static void DemoCppBackend()
+        {
+            Console.WriteLine("Demo 14: C++ Backend (Multi-Target)");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+Function Factorial(n As Integer) As Integer
+    If n <= 1 Then
+        Return 1
+    Else
+        Return n * Factorial(n - 1)
+    End If
+End Function
+
+Sub Main()
+    Dim result As Integer
+    result = Factorial(5)
+    PrintLine(result)
+End Sub
+";
+
+            var cppCode = CompileToCpp(source, "FactorialCpp");
+
+            Console.WriteLine("Generated C++:");
+            Console.WriteLine(cppCode);
+            Console.WriteLine();
+
+            SaveToFile("Factorial.cpp", cppCode);
+        }
+
+        // ====================================================================
+        // Demo 15: LLVM Backend
+        // ====================================================================
+
+        static void DemoLLVMBackend()
+        {
+            Console.WriteLine("Demo 15: LLVM IR Backend (Native Compilation)");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+Function Square(x As Integer) As Integer
+    Return x * x
+End Function
+
+Function SumSquares(n As Integer) As Integer
+    Dim sum As Integer
+    Dim i As Integer
+
+    sum = 0
+    For i = 1 To n
+        sum = sum + Square(i)
+    Next i
+
+    Return sum
+End Function
+
+Sub Main()
+    Dim result As Integer
+    result = SumSquares(5)
+    PrintLine(result)
+End Sub
+";
+
+            var llvmCode = CompileToLLVM(source, "SumSquares");
+
+            Console.WriteLine("Generated LLVM IR:");
+            Console.WriteLine(llvmCode);
+            Console.WriteLine();
+
+            SaveToFile("SumSquares.ll", llvmCode);
+        }
+
+        // ====================================================================
+        // Demo 16: MSIL Backend
+        // ====================================================================
+
+        static void DemoMSILBackend()
+        {
+            Console.WriteLine("Demo 16: MSIL Backend (.NET IL Assembly)");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+Function Multiply2(x As Integer) As Integer
+    Return x * 2
+End Function
+
+Function AddDoubled(a As Integer, b As Integer) As Integer
+    Dim result As Integer
+    result = Multiply2(a) + Multiply2(b)
+    Return result
+End Function
+
+Sub Main()
+    Dim x As Integer
+    Dim y As Integer
+    Dim result As Integer
+
+    x = 5
+    y = 10
+    result = AddDoubled(x, y)
+    PrintLine(result)
+End Sub
+";
+
+            var msilCode = CompileToMSIL(source, "DoubleSumDemo");
+
+            Console.WriteLine("Generated MSIL:");
+            Console.WriteLine(msilCode);
+            Console.WriteLine();
+
+            SaveToFile("DoubleSumDemo.il", msilCode);
+        }
+
+        // ====================================================================
+        // Demo 17: Standard Library Abstraction
+        // ====================================================================
+
+        static void DemoStdLibAbstraction()
+        {
+            Console.WriteLine("Demo 17: Standard Library Abstraction (Multi-Backend)");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            // Initialize the registry
+            StdLibRegistry.Initialize();
+
+            // Show support matrix
+            Console.WriteLine(StdLibRegistry.GenerateSupportMatrix());
+            Console.WriteLine();
+
+            // Demo stdlib functions across backends
+            Console.WriteLine("Sample Stdlib Emissions by Backend:");
+            Console.WriteLine("-".PadRight(40, '-'));
+
+            var testFunctions = new[] { "PrintLine", "Sqrt", "Abs", "Len", "CInt" };
+            var targets = new[] { TargetPlatform.CSharp, TargetPlatform.Cpp, TargetPlatform.LLVM, TargetPlatform.MSIL };
+
+            foreach (var func in testFunctions)
+            {
+                Console.WriteLine($"\n{func}():");
+                foreach (var target in targets)
+                {
+                    if (StdLibRegistry.CanHandle(target, func))
+                    {
+                        var emission = StdLibRegistry.EmitCall(target, func, "value");
+                        Console.WriteLine($"  {target,-8}: {emission}");
+                    }
+                }
+            }
+
+            Console.WriteLine();
+
+            // Show inline implementations for C++
+            Console.WriteLine("\nC++ Inline Helper Functions:");
+            Console.WriteLine("-".PadRight(40, '-'));
+
+            var cppHelpers = new[] { "UCase", "LCase", "Trim", "Replace" };
+            foreach (var func in cppHelpers)
+            {
+                var impl = StdLibRegistry.GetInlineImplementation(TargetPlatform.Cpp, func);
+                if (!string.IsNullOrEmpty(impl))
+                {
+                    Console.WriteLine($"// {func}");
+                    Console.WriteLine(impl.Trim());
+                    Console.WriteLine();
+                }
+            }
+
+            // Demo: Compile a program using stdlib to all backends
+            Console.WriteLine("\nCompiling Stdlib Demo to All Backends:");
+            Console.WriteLine("-".PadRight(40, '-'));
+
+            string source = @"
+Sub Main()
+    Dim x As Double
+    Dim result As Double
+
+    x = 16.0
+    result = Sqrt(x)
+    PrintLine(result)
+
+    result = Abs(-5.5)
+    PrintLine(result)
+
+    result = Pow(2, 8)
+    PrintLine(result)
+End Sub
+";
+
+            // Compile to C#
+            var csharpCode = CompileToCSharp(source, "StdLibDemo");
+            if (csharpCode != null)
+            {
+                Console.WriteLine("\n--- C# Output ---");
+                Console.WriteLine(csharpCode.Substring(0, Math.Min(500, csharpCode.Length)) + "...");
+                SaveToFile("StdLibDemo.cs", csharpCode);
+            }
+
+            // Compile to C++
+            var cppCode = CompileToCpp(source, "StdLibDemo");
+            if (cppCode != null)
+            {
+                Console.WriteLine("\n--- C++ Output ---");
+                Console.WriteLine(cppCode.Substring(0, Math.Min(500, cppCode.Length)) + "...");
+                SaveToFile("StdLibDemo.cpp", cppCode);
+            }
+
+            // Compile to LLVM
+            var llvmCode = CompileToLLVM(source, "StdLibDemo");
+            if (llvmCode != null)
+            {
+                Console.WriteLine("\n--- LLVM IR Output ---");
+                Console.WriteLine(llvmCode.Substring(0, Math.Min(800, llvmCode.Length)) + "...");
+                SaveToFile("StdLibDemo.ll", llvmCode);
+            }
+
+            // Compile to MSIL
+            var msilCode = CompileToMSIL(source, "StdLibDemo");
+            if (msilCode != null)
+            {
+                Console.WriteLine("\n--- MSIL Output ---");
+                Console.WriteLine(msilCode.Substring(0, Math.Min(800, msilCode.Length)) + "...");
+                SaveToFile("StdLibDemo.il", msilCode);
+            }
+
+            Console.WriteLine();
+        }
+
+        // ====================================================================
+        // Demo 18: Platform Externs
+        // ====================================================================
+
+        static void DemoPlatformExterns()
+        {
+            Console.WriteLine("Demo 18: Platform Externs (Native API Bindings)");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            // Demo: Parsing extern declarations
+            Console.WriteLine("Platform externs allow declaring native APIs with per-backend implementations.");
+            Console.WriteLine();
+
+            string source = @"
+' Platform extern declaration - maps to native APIs per backend
+Extern Function ShowMessage(text As String) As Integer
+    CSharp: ""System.Windows.Forms.MessageBox.Show""
+    Cpp: ""MessageBoxA""
+    LLVM: ""@printf""
+    MSIL: ""System.Console::WriteLine""
+End Extern
+
+Extern Function GetCurrentTime() As Integer
+    CSharp: ""Environment.TickCount""
+    Cpp: ""time(nullptr)""
+End Extern
+
+Sub Main()
+    Dim result As Integer
+    result = ShowMessage(""Hello from BasicLang!"")
+    PrintLine(""Message result: "")
+    PrintLine(result)
+End Sub
+";
+
+            Console.WriteLine("Source code with extern declarations:");
+            Console.WriteLine("-".PadRight(40, '-'));
+            Console.WriteLine(source);
+
+            // Parse and show the AST
+            try
+            {
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+                Console.WriteLine($"✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Show extern-related tokens
+                Console.WriteLine("\nExtern-related tokens:");
+                foreach (var token in tokens.Where(t =>
+                    t.Type == TokenType.Extern ||
+                    t.Type == TokenType.EndExtern ||
+                    (t.Value?.ToString()?.Contains("CSharp") == true) ||
+                    (t.Value?.ToString()?.Contains("Cpp") == true) ||
+                    (t.Value?.ToString()?.Contains("LLVM") == true) ||
+                    (t.Value?.ToString()?.Contains("MSIL") == true)))
+                {
+                    Console.WriteLine($"  {token.Type}: {token.Value}");
+                }
+
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+                Console.WriteLine($"✓ Parsing: AST with {ast.Declarations.Count} declarations");
+
+                // Count externs
+                var externCount = ast.Declarations.Count(d => d is ExternDeclarationNode);
+                Console.WriteLine($"  - {externCount} extern declaration(s)");
+
+                // Show extern details
+                foreach (var decl in ast.Declarations.OfType<ExternDeclarationNode>())
+                {
+                    Console.WriteLine($"\n  Extern {(decl.IsFunction ? "Function" : "Sub")} {decl.Name}:");
+                    Console.WriteLine($"    Parameters: {decl.Parameters.Count}");
+                    if (decl.IsFunction)
+                    {
+                        Console.WriteLine($"    Return Type: {decl.ReturnType?.Name ?? "Void"}");
+                    }
+                    Console.WriteLine($"    Platform Implementations:");
+                    foreach (var impl in decl.PlatformImplementations)
+                    {
+                        Console.WriteLine($"      {impl.Key}: {impl.Value}");
+                    }
+                }
+
+                // Semantic analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+
+                if (semanticSuccess)
+                {
+                    Console.WriteLine($"✓ Semantic analysis passed");
+                }
+                else
+                {
+                    Console.WriteLine("✗ Semantic analysis failed:");
+                    foreach (var error in semanticAnalyzer.Errors)
+                    {
+                        Console.WriteLine($"  {error}");
+                    }
+                }
+
+                // IR generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, "PlatformExterns");
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions, {irModule.ExternDeclarations.Count} externs");
+
+                // Show IR externs
+                Console.WriteLine("\nIR Extern Declarations:");
+                foreach (var externDecl in irModule.ExternDeclarations.Values)
+                {
+                    Console.WriteLine($"  {externDecl.Name}: {externDecl.PlatformImplementations.Count} platform(s)");
+                }
+
+                // Generate code for each backend and show how extern is handled
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated Code Snippets (extern calls):");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                // C# output
+                var csharpCode = CompileToCSharp(source, "PlatformExterns");
+                if (csharpCode != null)
+                {
+                    Console.WriteLine("\n--- C# Output ---");
+                    var snippet = ExtractExternCallSnippet(csharpCode, "ShowMessage");
+                    Console.WriteLine(snippet ?? csharpCode.Substring(0, Math.Min(400, csharpCode.Length)) + "...");
+                    SaveToFile("PlatformExterns.cs", csharpCode);
+                }
+
+                // C++ output
+                var cppCode = CompileToCpp(source, "PlatformExterns");
+                if (cppCode != null)
+                {
+                    Console.WriteLine("\n--- C++ Output ---");
+                    var snippet = ExtractExternCallSnippet(cppCode, "ShowMessage");
+                    Console.WriteLine(snippet ?? cppCode.Substring(0, Math.Min(400, cppCode.Length)) + "...");
+                    SaveToFile("PlatformExterns.cpp", cppCode);
+                }
+
+                // LLVM output
+                var llvmCode = CompileToLLVM(source, "PlatformExterns");
+                if (llvmCode != null)
+                {
+                    Console.WriteLine("\n--- LLVM IR Output ---");
+                    var snippet = ExtractExternCallSnippet(llvmCode, "ShowMessage");
+                    Console.WriteLine(snippet ?? llvmCode.Substring(0, Math.Min(400, llvmCode.Length)) + "...");
+                    SaveToFile("PlatformExterns.ll", llvmCode);
+                }
+
+                // MSIL output
+                var msilCode = CompileToMSIL(source, "PlatformExterns");
+                if (msilCode != null)
+                {
+                    Console.WriteLine("\n--- MSIL Output ---");
+                    var snippet = ExtractExternCallSnippet(msilCode, "ShowMessage");
+                    Console.WriteLine(snippet ?? msilCode.Substring(0, Math.Min(400, msilCode.Length)) + "...");
+                    SaveToFile("PlatformExterns.il", msilCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Error: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+
+            Console.WriteLine();
+        }
+
+        static string ExtractExternCallSnippet(string code, string functionName)
+        {
+            // Try to find a snippet containing the extern call
+            var lines = code.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (lines[i].Contains(functionName) || lines[i].Contains("ShowMessage"))
+                {
+                    // Return context around this line
+                    int start = Math.Max(0, i - 2);
+                    int end = Math.Min(lines.Length - 1, i + 2);
+                    return string.Join("\n", lines.Skip(start).Take(end - start + 1));
+                }
+            }
+            return null;
+        }
+
+        // ====================================================================
+        // Demo 19: OOP Features (Classes, Constructors, Properties, Inheritance)
+        // ====================================================================
+
+        static void DemoOOPFeatures()
+        {
+            Console.WriteLine("Demo 19: OOP Features (Classes, Constructors, Properties, Inheritance)");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+' Base class with constructor and method
+Class Person
+    Private _name As String
+    Private _age As Integer
+
+    ' Constructor
+    Sub New(name As String, age As Integer)
+        _name = name
+        _age = age
+    End Sub
+
+    ' Virtual method to get a greeting
+    Public Overridable Function Greet() As String
+        Return ""Hello, I am "" & _name
+    End Function
+
+    ' Getter method for name
+    Public Function GetName() As String
+        Return _name
+    End Function
+
+    ' Static factory method
+    Public Shared Function CreateDefault() As Person
+        Return New Person(""Unknown"", 0)
+    End Function
+End Class
+
+' Derived class with inheritance
+Class Employee Inherits Person
+    Private _department As String
+
+    ' Constructor calling base constructor
+    Sub New(name As String, age As Integer, dept As String)
+        MyBase.New(name, age)
+        _department = dept
+    End Sub
+
+    ' Override virtual method
+    Public Overrides Function Greet() As String
+        Return MyBase.Greet() & "" from "" & _department
+    End Function
+End Class
+
+Sub Main()
+    ' Create instances
+    Dim person As Person
+    Dim employee As Employee
+
+    person = New Person(""John"", 30)
+    employee = New Employee(""Jane"", 25, ""Engineering"")
+
+    ' Use methods
+    PrintLine(person.GetName())
+    PrintLine(employee.Greet())
+
+    ' Static method call
+    Dim defaultPerson As Person
+    defaultPerson = Person.CreateDefault()
+End Sub
+";
+
+            Console.WriteLine("Source code with OOP features:");
+            Console.WriteLine("-".PadRight(40, '-'));
+            Console.WriteLine(source);
+
+            try
+            {
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+                Console.WriteLine($"✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Show OOP-related tokens
+                Console.WriteLine("\nOOP-related tokens:");
+                foreach (var token in tokens.Where(t =>
+                    t.Type == TokenType.Class ||
+                    t.Type == TokenType.EndClass ||
+                    t.Type == TokenType.Inherits ||
+                    t.Type == TokenType.Property ||
+                    t.Type == TokenType.EndProperty ||
+                    t.Type == TokenType.Get ||
+                    t.Type == TokenType.EndGet ||
+                    t.Type == TokenType.Set ||
+                    t.Type == TokenType.EndSet ||
+                    t.Type == TokenType.MyBase ||
+                    t.Type == TokenType.Shared ||
+                    t.Type == TokenType.Overridable ||
+                    t.Type == TokenType.Overrides))
+                {
+                    Console.WriteLine($"  {token.Type}: {token.Value}");
+                }
+
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+                Console.WriteLine($"✓ Parsing: AST with {ast.Declarations.Count} declarations");
+
+                // Count classes
+                var classCount = ast.Declarations.Count(d => d is ClassNode);
+                Console.WriteLine($"  - {classCount} class declaration(s)");
+
+                // Show class details
+                foreach (var decl in ast.Declarations.OfType<ClassNode>())
+                {
+                    Console.WriteLine($"\n  Class {decl.Name}:");
+                    if (!string.IsNullOrEmpty(decl.BaseClass))
+                    {
+                        Console.WriteLine($"    Inherits: {decl.BaseClass}");
+                    }
+                    Console.WriteLine($"    Members: {decl.Members.Count}");
+
+                    // Count member types
+                    var constructorCount = decl.Members.Count(m => m is ConstructorNode);
+                    var propertyCount = decl.Members.Count(m => m is PropertyNode);
+                    var methodCount = decl.Members.Count(m => m is FunctionNode || m is SubroutineNode);
+                    var fieldCount = decl.Members.Count(m => m is VariableDeclarationNode);
+
+                    Console.WriteLine($"      - {constructorCount} constructor(s)");
+                    Console.WriteLine($"      - {propertyCount} property/properties");
+                    Console.WriteLine($"      - {methodCount} method(s)");
+                    Console.WriteLine($"      - {fieldCount} field(s)");
+                }
+
+                // Semantic analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+
+                if (semanticSuccess)
+                {
+                    Console.WriteLine($"✓ Semantic analysis passed");
+                }
+                else
+                {
+                    Console.WriteLine("✗ Semantic analysis failed:");
+                    foreach (var error in semanticAnalyzer.Errors)
+                    {
+                        Console.WriteLine($"  {error}");
+                    }
+                }
+
+                // IR generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, "OOPFeatures");
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions, {irModule.Classes.Count} classes");
+
+                // Show IR class info
+                Console.WriteLine("\nIR Class Structures:");
+                foreach (var irClass in irModule.Classes.Values)
+                {
+                    Console.WriteLine($"  {irClass.Name}:");
+                    Console.WriteLine($"    Base: {irClass.BaseClass ?? "(none)"}");
+                    Console.WriteLine($"    Fields: {irClass.Fields.Count}");
+                    Console.WriteLine($"    Constructors: {irClass.Constructors.Count}");
+                    Console.WriteLine($"    Properties: {irClass.Properties.Count}");
+                    Console.WriteLine($"    Methods: {irClass.Methods.Count}");
+                }
+
+                // Generate C# code
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated C# Code:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var csharpCode = CompileToCSharp(source, "OOPFeatures");
+                if (csharpCode != null)
+                {
+                    Console.WriteLine(csharpCode);
+                    SaveToFile("OOPFeatures.cs", csharpCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Error: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+
+            Console.WriteLine();
+        }
+
+        // ====================================================================
+        // Demo 20: Advanced Language Features (Generics, Lambdas, Exception Handling)
+        // ====================================================================
+
+        static void DemoAdvancedFeatures()
+        {
+            Console.WriteLine("Demo 20: Advanced Language Features (Generics, Lambdas, Exception Handling)");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+' ============================================
+' Demo: Generics, Lambdas, and Exception Handling
+' ============================================
+
+' Generic class definition
+Class Stack(Of T)
+    Private items(100) As T
+    Private count As Integer
+
+    Sub New()
+        count = 0
+    End Sub
+
+    Sub Push(item As T)
+        items(count) = item
+        count = count + 1
+    End Sub
+
+    Function Pop() As T
+        count = count - 1
+        Return items(count)
+    End Function
+
+    Function IsEmpty() As Boolean
+        Return count = 0
+    End Function
+End Class
+
+' Generic function
+Function Max(Of T)(a As T, b As T) As T
+    If a > b Then
+        Return a
+    Else
+        Return b
+    End If
+End Function
+
+' Function that demonstrates exception handling
+Sub ProcessData(value As Integer)
+    Try
+        If value < 0 Then
+            Throw New Exception(""Value cannot be negative"")
+        End If
+        PrintLine(""Processing: "" & Str(value))
+    Catch ex As Exception
+        PrintLine(""Error: "" & ex.Message)
+    Finally
+        PrintLine(""Cleanup complete"")
+    End Try
+End Sub
+
+' Main program demonstrating all features
+Sub Main()
+    PrintLine(""=== Generics Demo ==="")
+
+    ' Using generic class
+    Dim intStack As Stack(Of Integer)
+    intStack = New Stack(Of Integer)()
+    intStack.Push(10)
+    intStack.Push(20)
+    intStack.Push(30)
+    PrintLine(""Popped: "" & Str(intStack.Pop()))
+
+    ' Using generic function
+    Dim maxVal As Integer
+    maxVal = Max(Of Integer)(42, 17)
+    PrintLine(""Max value: "" & Str(maxVal))
+
+    PrintLine("""")
+    PrintLine(""=== Exception Handling Demo ==="")
+
+    ' Normal processing
+    ProcessData(100)
+
+    ' This will throw and catch an exception
+    ProcessData(-5)
+
+    PrintLine("""")
+    PrintLine(""=== Lambda Demo ==="")
+
+    ' Lambda expressions (conceptual - showing syntax)
+    ' Dim square = Function(x As Integer) x * x
+    ' Dim doubled = Function(x) x * 2
+    PrintLine(""Lambda syntax supported: Function(x) x * 2"")
+End Sub
+";
+
+            Console.WriteLine("Source code with advanced features:");
+            Console.WriteLine("-".PadRight(40, '-'));
+            Console.WriteLine(source);
+
+            try
+            {
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+                Console.WriteLine($"✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Show relevant tokens
+                Console.WriteLine("\nAdvanced feature tokens found:");
+                var relevantTypes = new[] {
+                    TokenType.Of, TokenType.Try, TokenType.Catch, TokenType.Finally,
+                    TokenType.Throw, TokenType.EndTry, TokenType.Function
+                };
+                foreach (var token in tokens.Where(t => relevantTypes.Contains(t.Type)))
+                {
+                    Console.WriteLine($"  {token.Type}: {token.Value ?? token.Lexeme}");
+                }
+
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+                Console.WriteLine($"\n✓ Parsing: AST with {ast.Declarations.Count} declarations");
+
+                // Count declarations by type
+                var classCount = ast.Declarations.Count(d => d is ClassNode);
+                var funcCount = ast.Declarations.Count(d => d is FunctionNode);
+                var subCount = ast.Declarations.Count(d => d is SubroutineNode);
+                Console.WriteLine($"  - {classCount} class(es)");
+                Console.WriteLine($"  - {funcCount} function(s)");
+                Console.WriteLine($"  - {subCount} subroutine(s)");
+
+                // Show generic class details
+                foreach (var decl in ast.Declarations.OfType<ClassNode>())
+                {
+                    if (decl.GenericParameters.Count > 0)
+                    {
+                        Console.WriteLine($"\n  Generic Class: {decl.Name}<{string.Join(", ", decl.GenericParameters)}>");
+                    }
+                }
+
+                // Show generic function details
+                foreach (var decl in ast.Declarations.OfType<FunctionNode>())
+                {
+                    if (decl.GenericParameters.Count > 0)
+                    {
+                        Console.WriteLine($"  Generic Function: {decl.Name}<{string.Join(", ", decl.GenericParameters)}>");
+                    }
+                }
+
+                // Semantic analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+
+                if (semanticSuccess)
+                {
+                    Console.WriteLine($"✓ Semantic analysis passed");
+                }
+                else
+                {
+                    Console.WriteLine("✗ Semantic analysis had warnings/errors:");
+                    foreach (var error in semanticAnalyzer.Errors.Take(5))
+                    {
+                        Console.WriteLine($"  {error}");
+                    }
+                }
+
+                // IR generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, "AdvancedFeatures");
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions, {irModule.Classes.Count} classes");
+
+                // Show IR info
+                Console.WriteLine("\nIR Details:");
+                foreach (var func in irModule.Functions)
+                {
+                    var genericInfo = func.GenericParameters.Count > 0
+                        ? $"<{string.Join(", ", func.GenericParameters)}>"
+                        : "";
+                    Console.WriteLine($"  Function: {func.Name}{genericInfo}");
+                }
+                foreach (var irClass in irModule.Classes.Values)
+                {
+                    var genericInfo = irClass.GenericParameters.Count > 0
+                        ? $"<{string.Join(", ", irClass.GenericParameters)}>"
+                        : "";
+                    Console.WriteLine($"  Class: {irClass.Name}{genericInfo}");
+                }
+
+                // Generate C# code
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated C# Code:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var csharpCode = CompileToCSharp(source, "AdvancedFeatures");
+                if (csharpCode != null)
+                {
+                    Console.WriteLine(csharpCode);
+                    SaveToFile("AdvancedFeatures.cs", csharpCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Error: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+
+            Console.WriteLine();
+        }
+
+        // ====================================================================
+        // Demo 21: Async/Await and Iterators
+        // ====================================================================
+
+        static void DemoAsyncAndIterators()
+        {
+            Console.WriteLine("Demo 21: Async/Await and Iterators");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+' Demo: Async Functions and Iterators
+
+' Async function that simulates an HTTP call
+Async Function GetStringAsync(url As String) As String
+    Return ""Response from: "" & url
+End Function
+
+' Async function example
+Async Function FetchDataAsync(url As String) As String
+    Dim result As String
+    result = Await GetStringAsync(url)
+    Return result
+End Function
+
+' Async subroutine example
+Async Sub ProcessAsync()
+    Dim data As String
+    data = Await FetchDataAsync(""https://example.com/api"")
+    PrintLine(data)
+End Sub
+
+' Simple iterator function
+Iterator Function CountTo(max As Integer) As Integer
+    Dim i As Integer
+    For i = 1 To max
+        Yield i
+    Next
+End Function
+
+Sub Main()
+    PrintLine(""Async/Await and Iterator Demo"")
+    ProcessAsync()
+End Sub
+";
+
+            Console.WriteLine("Source code with Async/Await and Iterators:");
+            Console.WriteLine("-".PadRight(40, '-'));
+            Console.WriteLine(source);
+
+            try
+            {
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+                Console.WriteLine($"\n✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Show relevant tokens
+                Console.WriteLine("\nAsync/Iterator tokens found:");
+                var relevantTypes = new[] {
+                    TokenType.Async, TokenType.Await, TokenType.Iterator, TokenType.Yield
+                };
+                foreach (var token in tokens.Where(t => relevantTypes.Contains(t.Type)))
+                {
+                    Console.WriteLine($"  {token.Type}: {token.Value ?? token.Lexeme}");
+                }
+
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+                Console.WriteLine($"\n✓ Parsing: AST with {ast.Declarations.Count} declarations");
+
+                // Count declarations by type and features
+                var asyncFuncs = ast.Declarations.OfType<FunctionNode>().Where(f => f.IsAsync).ToList();
+                var asyncSubs = ast.Declarations.OfType<SubroutineNode>().Where(s => s.IsAsync).ToList();
+                var iteratorFuncs = ast.Declarations.OfType<FunctionNode>().Where(f => f.IsIterator).ToList();
+
+                Console.WriteLine($"  - {asyncFuncs.Count} async function(s)");
+                foreach (var f in asyncFuncs)
+                    Console.WriteLine($"      {f.Name}");
+                Console.WriteLine($"  - {asyncSubs.Count} async subroutine(s)");
+                foreach (var s in asyncSubs)
+                    Console.WriteLine($"      {s.Name}");
+                Console.WriteLine($"  - {iteratorFuncs.Count} iterator function(s)");
+                foreach (var f in iteratorFuncs)
+                    Console.WriteLine($"      {f.Name}");
+
+                // Semantic analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+                Console.WriteLine($"✓ Semantic analysis: {semanticAnalyzer.Errors.Count} errors, {semanticAnalyzer.Errors.Count(e => e.Severity == ErrorSeverity.Warning)} warnings");
+
+                // IR generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, "AsyncIteratorDemo");
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions");
+
+                // Generate C# code
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated C# Code:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var csharpCode = CompileToCSharp(source, "AsyncIteratorDemo");
+                if (csharpCode != null)
+                {
+                    Console.WriteLine(csharpCode);
+                    SaveToFile("AsyncIteratorDemo.cs", csharpCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Error: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+
+            Console.WriteLine();
+        }
+
+        // ====================================================================
         // Compilation Pipeline
         // ====================================================================
 
@@ -751,6 +1749,147 @@ End Sub
                 Console.WriteLine($"✓ C++ code generation: {cppCode.Length} characters");
 
                 return cppCode;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Compilation failed: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Compile BasicLang source to LLVM IR
+        /// </summary>
+        static string CompileToLLVM(string source, string className)
+        {
+            try
+            {
+                // Phase 1: Lexical Analysis
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+
+                Console.WriteLine($"✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Phase 2: Parsing
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+
+                Console.WriteLine($"✓ Parsing: AST with {ast.Declarations.Count} declarations");
+
+                // Phase 3: Semantic Analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+
+                if (!semanticSuccess)
+                {
+                    Console.WriteLine("✗ Semantic analysis failed:");
+                    foreach (var error in semanticAnalyzer.Errors)
+                    {
+                        Console.WriteLine($"  {error}");
+                    }
+                    return null;
+                }
+
+                Console.WriteLine($"✓ Semantic analysis: {semanticAnalyzer.Errors.Count} errors");
+
+                // Phase 4: IR Generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, className);
+
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions");
+
+                // Phase 5: Optimization
+                var optimizer = new OptimizationPipeline();
+                optimizer.AddStandardPasses();
+
+                var optimizationResult = optimizer.Run(irModule);
+
+                Console.WriteLine($"✓ Optimization: {optimizationResult.TotalModifications} improvements");
+
+                // Phase 6: LLVM IR Code Generation
+                var llvmOptions = new LLVMCodeGenOptions
+                {
+                    GenerateComments = true
+                };
+
+                var llvmGenerator = new LLVMCodeGenerator(llvmOptions);
+                var llvmCode = llvmGenerator.Generate(irModule);
+
+                Console.WriteLine($"✓ LLVM IR generation: {llvmCode.Length} characters");
+
+                return llvmCode;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Compilation failed: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Compile BasicLang source to MSIL (.NET IL)
+        /// </summary>
+        static string CompileToMSIL(string source, string className)
+        {
+            try
+            {
+                // Phase 1: Lexical Analysis
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+
+                Console.WriteLine($"✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Phase 2: Parsing
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+
+                Console.WriteLine($"✓ Parsing: AST with {ast.Declarations.Count} declarations");
+
+                // Phase 3: Semantic Analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+
+                if (!semanticSuccess)
+                {
+                    Console.WriteLine("✗ Semantic analysis failed:");
+                    foreach (var error in semanticAnalyzer.Errors)
+                    {
+                        Console.WriteLine($"  {error}");
+                    }
+                    return null;
+                }
+
+                Console.WriteLine($"✓ Semantic analysis: {semanticAnalyzer.Errors.Count} errors");
+
+                // Phase 4: IR Generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, className);
+
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions");
+
+                // Phase 5: Optimization
+                var optimizer = new OptimizationPipeline();
+                optimizer.AddStandardPasses();
+
+                var optimizationResult = optimizer.Run(irModule);
+
+                Console.WriteLine($"✓ Optimization: {optimizationResult.TotalModifications} improvements");
+
+                // Phase 6: MSIL Code Generation
+                var msilOptions = new MSILCodeGenOptions
+                {
+                    GenerateComments = true,
+                    AssemblyName = className
+                };
+
+                var msilGenerator = new MSILCodeGenerator(msilOptions);
+                var msilCode = msilGenerator.Generate(irModule);
+
+                Console.WriteLine($"✓ MSIL generation: {msilCode.Length} characters");
+
+                return msilCode;
             }
             catch (Exception ex)
             {

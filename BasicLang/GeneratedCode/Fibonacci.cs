@@ -1,5 +1,7 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace GeneratedCode
 {
@@ -19,10 +21,9 @@ namespace GeneratedCode
 
         public static void Main()
         {
-            int result = default(int);
+            int result = 0;
 
             result = Fibonacci(10);
-            return;
         }
 
     }

@@ -1,5 +1,7 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace GeneratedCode
 {
@@ -7,8 +9,8 @@ namespace GeneratedCode
     {
         public static int FindMax(int[] arr)
         {
-            int max = default(int);
-            int i = default(int);
+            int max = 0;
+            int i = 0;
 
             max = arr[0];
             i = 1;
@@ -25,11 +27,10 @@ namespace GeneratedCode
 
         public static void Main()
         {
-            int[] numbers = default(int[]);
-            int maximum = default(int);
+            int[] numbers = new int[10];
+            int maximum = 0;
 
             maximum = FindMax(numbers);
-            return;
         }
 
     }

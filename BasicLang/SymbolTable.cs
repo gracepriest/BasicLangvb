@@ -17,17 +17,23 @@ public class TypeInfo
         public List<TypeInfo> Interfaces { get; set; }
         public List<TypeInfo> GenericArguments { get; set; }
         public TypeInfo ElementType { get; set; } // For arrays
+        public TypeInfo UnderlyingType { get; set; } // For nullable types
+        public List<TypeInfo> TupleElementTypes { get; set; } // For tuples
+        public List<string> TupleElementNames { get; set; } // For named tuple elements
         public int ArrayRank { get; set; } // Number of dimensions
         public int ArraySize { get; set; } // Size of array (for fixed-size arrays)
         public bool IsPointer { get; set; }
+        public bool IsNullable { get; set; }
         public Dictionary<string, Symbol> Members { get; set; }
-        
+
         public TypeInfo(string name, TypeKind kind)
         {
             Name = name;
             Kind = kind;
             Interfaces = new List<TypeInfo>();
             GenericArguments = new List<TypeInfo>();
+            TupleElementTypes = new List<TypeInfo>();
+            TupleElementNames = new List<string>();
             Members = new Dictionary<string, Symbol>();
         }
         
@@ -145,6 +151,8 @@ public class TypeInfo
         TypeParameter,  // Generic type parameter
         Array,
         Pointer,
+        Nullable,       // Nullable value type
+        Tuple,          // Tuple type
         Void
     }
     
@@ -171,7 +179,11 @@ public class TypeInfo
         
         // Access control
         public AccessModifier Access { get; set; }
-        
+
+        // For extern declarations
+        public bool IsExtern { get; set; }
+        public Dictionary<string, string> ExternImplementations { get; set; }
+
         public Symbol(string name, SymbolKind kind, TypeInfo type, int line, int column)
         {
             Name = name;
@@ -204,7 +216,9 @@ public class TypeInfo
         Type,
         Module,
         Namespace,
-        TypeParameter
+        TypeParameter,
+        Property,
+        Event
     }
     
     /// <summary>

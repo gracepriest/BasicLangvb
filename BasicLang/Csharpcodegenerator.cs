@@ -52,5 +52,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         public void Visit(IRSwitch switchInst) => _generator.Visit(switchInst);
         public void Visit(IRLabel label) => _generator.Visit(label);
         public void Visit(IRComment comment) => _generator.Visit(comment);
+        public void Visit(IRArrayAlloc arrayAlloc) => _generator.Visit(arrayAlloc);
+        public void Visit(IRArrayStore arrayStore) => _generator.Visit(arrayStore);
+        public void Visit(IRAwait awaitInst) => _generator.Visit(awaitInst);
+        public void Visit(IRYield yieldInst) => _generator.Visit(yieldInst);
+        public void Visit(IRNewObject newObj) => _generator.Visit(newObj);
+        public void Visit(IRInstanceMethodCall methodCall) => _generator.Visit(methodCall);
+        public void Visit(IRBaseMethodCall baseCall) => _generator.Visit(baseCall);
+        public void Visit(IRFieldAccess fieldAccess) => _generator.Visit(fieldAccess);
     }
 }

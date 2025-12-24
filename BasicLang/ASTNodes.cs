@@ -47,8 +47,10 @@ namespace BasicLang.Compiler.AST
         void Visit(WhileLoopNode node);
         void Visit(DoLoopNode node);
         void Visit(ForEachLoopNode node);
+        void Visit(WithStatementNode node);
         void Visit(TryStatementNode node);
         void Visit(CatchClauseNode node);
+        void Visit(ThrowStatementNode node);
         void Visit(ReturnStatementNode node);
         void Visit(ExitStatementNode node);
         void Visit(AssignmentStatementNode node);
@@ -56,17 +58,36 @@ namespace BasicLang.Compiler.AST
         void Visit(BinaryExpressionNode node);
         void Visit(UnaryExpressionNode node);
         void Visit(LiteralExpressionNode node);
+        void Visit(InterpolatedStringNode node);
         void Visit(IdentifierExpressionNode node);
         void Visit(MemberAccessExpressionNode node);
         void Visit(CallExpressionNode node);
         void Visit(ArrayAccessExpressionNode node);
         void Visit(NewExpressionNode node);
         void Visit(CastExpressionNode node);
+        void Visit(LambdaExpressionNode node);
         void Visit(TemplateDeclarationNode node);
         void Visit(DelegateDeclarationNode node);
         void Visit(ExtensionMethodNode node);
+        void Visit(ExternDeclarationNode node);
         void Visit(UsingDirectiveNode node);
         void Visit(ImportDirectiveNode node);
+        void Visit(ConstructorNode node);
+        void Visit(PropertyNode node);
+        void Visit(MyBaseExpressionNode node);
+        void Visit(CollectionInitializerNode node);
+        void Visit(TupleLiteralNode node);
+        void Visit(OperatorDeclarationNode node);
+        void Visit(EventDeclarationNode node);
+        void Visit(RaiseEventStatementNode node);
+        void Visit(AddHandlerStatementNode node);
+        void Visit(RemoveHandlerStatementNode node);
+        void Visit(TypePatternNode node);
+        void Visit(ConstantPatternNode node);
+        void Visit(RangePatternNode node);
+        void Visit(ComparisonPatternNode node);
+        void Visit(AwaitExpressionNode node);
+        void Visit(YieldStatementNode node);
     }
     
     // ============================================================================
@@ -94,32 +115,61 @@ namespace BasicLang.Compiler.AST
         public string Name { get; set; }
         public bool IsPointer { get; set; }
         public bool IsArray { get; set; }
+        public bool IsNullable { get; set; }
+        public bool IsTuple { get; set; }
         public List<int> ArrayDimensions { get; set; }
         public List<TypeReference> GenericArguments { get; set; }
-        
+        public List<TypeReference> TupleElementTypes { get; set; }
+        public List<string> TupleElementNames { get; set; }
+
         public TypeReference(string name)
         {
             Name = name;
             IsPointer = false;
             IsArray = false;
+            IsNullable = false;
+            IsTuple = false;
             ArrayDimensions = new List<int>();
             GenericArguments = new List<TypeReference>();
+            TupleElementTypes = new List<TypeReference>();
+            TupleElementNames = new List<string>();
         }
         
         public override string ToString()
         {
+            // Handle tuple types
+            if (IsTuple && TupleElementTypes.Count > 0)
+            {
+                var elements = new List<string>();
+                for (int i = 0; i < TupleElementTypes.Count; i++)
+                {
+                    var elementStr = TupleElementTypes[i].ToString();
+                    if (i < TupleElementNames.Count && !string.IsNullOrEmpty(TupleElementNames[i]))
+                    {
+                        elementStr = $"{TupleElementNames[i]} As {elementStr}";
+                    }
+                    elements.Add(elementStr);
+                }
+                return $"({string.Join(", ", elements)})";
+            }
+
             var result = Name;
-            
+
             if (GenericArguments.Count > 0)
             {
                 result += $"(Of {string.Join(", ", GenericArguments)})";
             }
-            
+
+            if (IsNullable)
+            {
+                result += "?";
+            }
+
             if (IsPointer)
             {
                 result = $"Pointer To {result}";
             }
-            
+
             if (IsArray)
             {
                 foreach (var dim in ArrayDimensions)
@@ -127,7 +177,7 @@ namespace BasicLang.Compiler.AST
                     result += $"[{(dim >= 0 ? dim.ToString() : "")}]";
                 }
             }
-            
+
             return result;
         }
     }
@@ -280,16 +330,29 @@ namespace BasicLang.Compiler.AST
         public List<ParameterNode> Parameters { get; set; }
         public BlockNode Body { get; set; }
         public string ImplementsInterface { get; set; }
-        
+
+        // OOP modifiers
+        public bool IsStatic { get; set; }       // Shared
+        public bool IsVirtual { get; set; }      // Overridable
+        public bool IsOverride { get; set; }     // Overrides
+        public bool IsSealed { get; set; }       // NotOverridable
+
+        // Async modifier
+        public bool IsAsync { get; set; }
+
+        // Generic parameters for generic subs: Sub Foo(Of T)(...)
+        public List<string> GenericParameters { get; set; }
+
         public SubroutineNode(int line, int column) : base(line, column)
         {
             Access = AccessModifier.Public;
             Parameters = new List<ParameterNode>();
+            GenericParameters = new List<string>();
         }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
-    
+
     public class FunctionNode : ASTNode
     {
         public string Name { get; set; }
@@ -299,31 +362,173 @@ namespace BasicLang.Compiler.AST
         public BlockNode Body { get; set; }
         public string ImplementsInterface { get; set; }
         public bool IsAbstract { get; set; }
-        
+
+        // OOP modifiers
+        public bool IsStatic { get; set; }       // Shared
+        public bool IsVirtual { get; set; }      // Overridable
+        public bool IsOverride { get; set; }     // Overrides
+        public bool IsSealed { get; set; }       // NotOverridable
+
+        // Async modifier
+        public bool IsAsync { get; set; }
+
+        // Iterator modifier
+        public bool IsIterator { get; set; }
+
+        // Generic parameters for generic functions: Function Foo(Of T)(...)
+        public List<string> GenericParameters { get; set; }
+
         public FunctionNode(int line, int column) : base(line, column)
         {
             Access = AccessModifier.Public;
             Parameters = new List<ParameterNode>();
+            GenericParameters = new List<string>();
         }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
-    
+
+    /// <summary>
+    /// Constructor declaration (Sub New)
+    /// </summary>
+    public class ConstructorNode : ASTNode
+    {
+        public AccessModifier Access { get; set; }
+        public List<ParameterNode> Parameters { get; set; }
+        public BlockNode Body { get; set; }
+        public List<ExpressionNode> BaseConstructorArgs { get; set; }  // For MyBase.New(args)
+
+        public ConstructorNode(int line, int column) : base(line, column)
+        {
+            Access = AccessModifier.Public;
+            Parameters = new List<ParameterNode>();
+            BaseConstructorArgs = new List<ExpressionNode>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Property declaration with getter and/or setter
+    /// </summary>
+    public class PropertyNode : ASTNode
+    {
+        public string Name { get; set; }
+        public AccessModifier Access { get; set; }
+        public TypeReference PropertyType { get; set; }
+        public bool IsReadOnly { get; set; }
+        public bool IsWriteOnly { get; set; }
+        public bool IsStatic { get; set; }       // Shared
+        public BlockNode Getter { get; set; }
+        public BlockNode Setter { get; set; }
+        public ParameterNode SetterParameter { get; set; }  // The 'value' parameter
+
+        public PropertyNode(int line, int column) : base(line, column)
+        {
+            Access = AccessModifier.Public;
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Operator overload declaration: Operator +(a As Type, b As Type) As Type
+    /// </summary>
+    public class OperatorDeclarationNode : ASTNode
+    {
+        public string OperatorSymbol { get; set; }  // +, -, *, /, =, <>, <, >, etc.
+        public AccessModifier Access { get; set; }
+        public bool IsShared { get; set; }  // Should always be True for operators
+        public bool IsWidening { get; set; }  // For conversion operators
+        public bool IsNarrowing { get; set; }  // For conversion operators
+        public List<ParameterNode> Parameters { get; set; }
+        public TypeReference ReturnType { get; set; }
+        public BlockNode Body { get; set; }
+
+        public OperatorDeclarationNode(int line, int column) : base(line, column)
+        {
+            Access = AccessModifier.Public;
+            IsShared = true;
+            Parameters = new List<ParameterNode>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Event declaration: Public Event Click As EventHandler
+    /// </summary>
+    public class EventDeclarationNode : ASTNode
+    {
+        public string Name { get; set; }
+        public AccessModifier Access { get; set; }
+        public TypeReference EventType { get; set; }  // The delegate type
+
+        public EventDeclarationNode(int line, int column) : base(line, column)
+        {
+            Access = AccessModifier.Public;
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// RaiseEvent statement: RaiseEvent Click(sender, args)
+    /// </summary>
+    public class RaiseEventStatementNode : StatementNode
+    {
+        public string EventName { get; set; }
+        public List<ExpressionNode> Arguments { get; set; }
+
+        public RaiseEventStatementNode(int line, int column) : base(line, column)
+        {
+            Arguments = new List<ExpressionNode>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// AddHandler statement: AddHandler obj.Event, AddressOf Handler
+    /// </summary>
+    public class AddHandlerStatementNode : StatementNode
+    {
+        public ExpressionNode EventExpression { get; set; }
+        public ExpressionNode HandlerExpression { get; set; }
+
+        public AddHandlerStatementNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// RemoveHandler statement: RemoveHandler obj.Event, AddressOf Handler
+    /// </summary>
+    public class RemoveHandlerStatementNode : StatementNode
+    {
+        public ExpressionNode EventExpression { get; set; }
+        public ExpressionNode HandlerExpression { get; set; }
+
+        public RemoveHandlerStatementNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
     // ============================================================================
     // Templates and Delegates
     // ============================================================================
-    
+
     public class TemplateDeclarationNode : ASTNode
     {
         public string Name { get; set; }
         public List<string> TypeParameters { get; set; }
         public ASTNode Declaration { get; set; }
-        
+
         public TemplateDeclarationNode(int line, int column) : base(line, column)
         {
             TypeParameters = new List<string>();
         }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     
@@ -345,12 +550,79 @@ namespace BasicLang.Compiler.AST
     {
         public string ExtendedType { get; set; }
         public FunctionNode Method { get; set; }
-        
+
         public ExtensionMethodNode(int line, int column) : base(line, column) { }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
-    
+
+    /// <summary>
+    /// Represents a platform extern declaration
+    /// Allows declaring native platform APIs with per-backend implementations
+    /// </summary>
+    /// <example>
+    /// Extern Function MessageBox(hwnd As Integer, text As String) As Integer
+    ///     CSharp: "System.Windows.Forms.MessageBox.Show"
+    ///     Cpp: "MessageBoxA"
+    ///     LLVM: "MessageBoxA"
+    /// End Extern
+    /// </example>
+    public class ExternDeclarationNode : ASTNode
+    {
+        /// <summary>
+        /// True if this is a Function (returns value), false if Sub (void)
+        /// </summary>
+        public bool IsFunction { get; set; }
+
+        /// <summary>
+        /// Name of the extern function/sub
+        /// </summary>
+        public string Name { get; set; }
+
+        /// <summary>
+        /// Parameters for the extern
+        /// </summary>
+        public List<ParameterNode> Parameters { get; set; }
+
+        /// <summary>
+        /// Return type (for functions)
+        /// </summary>
+        public TypeReference ReturnType { get; set; }
+
+        /// <summary>
+        /// Platform-specific implementations
+        /// Key: Platform name (CSharp, Cpp, LLVM, MSIL)
+        /// Value: The native implementation string
+        /// </summary>
+        public Dictionary<string, string> PlatformImplementations { get; set; }
+
+        public ExternDeclarationNode(int line, int column) : base(line, column)
+        {
+            Parameters = new List<ParameterNode>();
+            PlatformImplementations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+
+        /// <summary>
+        /// Get implementation for a specific platform
+        /// </summary>
+        public string GetImplementation(string platform)
+        {
+            if (PlatformImplementations.TryGetValue(platform, out var impl))
+                return impl;
+            return null;
+        }
+
+        /// <summary>
+        /// Check if this extern has an implementation for the given platform
+        /// </summary>
+        public bool HasImplementation(string platform)
+        {
+            return PlatformImplementations.ContainsKey(platform);
+        }
+    }
+
     // ============================================================================
     // Variable Declarations
     // ============================================================================
@@ -362,12 +634,13 @@ namespace BasicLang.Compiler.AST
         public ExpressionNode Initializer { get; set; }
         public AccessModifier Access { get; set; }
         public bool IsAuto { get; set; }
-        
+        public bool IsStatic { get; set; }       // Shared
+
         public VariableDeclarationNode(int line, int column) : base(line, column)
         {
             Access = AccessModifier.Public;
         }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     
@@ -421,14 +694,81 @@ namespace BasicLang.Compiler.AST
     public class CaseClauseNode : ASTNode
     {
         public List<ExpressionNode> Values { get; set; }
+        public List<PatternNode> Patterns { get; set; }  // For pattern matching
         public BlockNode Body { get; set; }
         public bool IsElse { get; set; }
-        
+
         public CaseClauseNode(int line, int column) : base(line, column)
         {
             Values = new List<ExpressionNode>();
+            Patterns = new List<PatternNode>();
         }
-        
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    // ============================================================================
+    // Pattern Matching
+    // ============================================================================
+
+    /// <summary>
+    /// Base class for patterns in pattern matching
+    /// </summary>
+    public abstract class PatternNode : ASTNode
+    {
+        public ExpressionNode WhenGuard { get; set; }  // Optional When clause
+
+        protected PatternNode(int line, int column) : base(line, column) { }
+    }
+
+    /// <summary>
+    /// Type pattern: Case Is Integer
+    /// </summary>
+    public class TypePatternNode : PatternNode
+    {
+        public TypeReference MatchType { get; set; }
+        public string VariableName { get; set; }  // Optional binding: Case x As Integer
+
+        public TypePatternNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Constant pattern: Case 1, Case "hello"
+    /// </summary>
+    public class ConstantPatternNode : PatternNode
+    {
+        public ExpressionNode Value { get; set; }
+
+        public ConstantPatternNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Range pattern: Case 1 To 10
+    /// </summary>
+    public class RangePatternNode : PatternNode
+    {
+        public ExpressionNode LowerBound { get; set; }
+        public ExpressionNode UpperBound { get; set; }
+
+        public RangePatternNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Comparison pattern: Case Is > 10
+    /// </summary>
+    public class ComparisonPatternNode : PatternNode
+    {
+        public string Operator { get; set; }  // >, <, >=, <=, =, <>
+        public ExpressionNode Value { get; set; }
+
+        public ComparisonPatternNode(int line, int column) : base(line, column) { }
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     
@@ -486,12 +826,25 @@ namespace BasicLang.Compiler.AST
         public TypeReference VariableType { get; set; }
         public ExpressionNode Collection { get; set; }
         public BlockNode Body { get; set; }
-        
+
         public ForEachLoopNode(int line, int column) : base(line, column) { }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
-    
+
+    /// <summary>
+    /// With block: With expr ... End With
+    /// </summary>
+    public class WithStatementNode : StatementNode
+    {
+        public ExpressionNode Object { get; set; }
+        public BlockNode Body { get; set; }
+
+        public WithStatementNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
     public class CatchClauseNode : ASTNode
     {
         public string ExceptionVariable { get; set; }
@@ -507,12 +860,22 @@ namespace BasicLang.Compiler.AST
     {
         public BlockNode TryBlock { get; set; }
         public List<CatchClauseNode> CatchClauses { get; set; }
-        
+        public BlockNode FinallyBlock { get; set; }
+
         public TryStatementNode(int line, int column) : base(line, column)
         {
             CatchClauses = new List<CatchClauseNode>();
         }
-        
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    public class ThrowStatementNode : StatementNode
+    {
+        public ExpressionNode Exception { get; set; }
+
+        public ThrowStatementNode(int line, int column) : base(line, column) { }
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     
@@ -591,21 +954,51 @@ namespace BasicLang.Compiler.AST
     {
         public object Value { get; set; }
         public TokenType LiteralType { get; set; }
-        
+
         public LiteralExpressionNode(int line, int column) : base(line, column) { }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
-    
+
+    /// <summary>
+    /// Interpolated string: $"Hello {name}, you are {age} years old"
+    /// </summary>
+    public class InterpolatedStringNode : ExpressionNode
+    {
+        /// <summary>
+        /// Parts of the interpolated string. Each part is either:
+        /// - A string (literal text)
+        /// - An ExpressionNode (interpolated expression)
+        /// </summary>
+        public List<object> Parts { get; set; }
+
+        public InterpolatedStringNode(int line, int column) : base(line, column)
+        {
+            Parts = new List<object>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
     public class IdentifierExpressionNode : ExpressionNode
     {
         public string Name { get; set; }
-        
+
         public IdentifierExpressionNode(int line, int column) : base(line, column) { }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
-    
+
+    /// <summary>
+    /// Represents the MyBase keyword for accessing base class members
+    /// </summary>
+    public class MyBaseExpressionNode : ExpressionNode
+    {
+        public MyBaseExpressionNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
     public class MemberAccessExpressionNode : ExpressionNode
     {
         public ExpressionNode Object { get; set; }
@@ -659,9 +1052,87 @@ namespace BasicLang.Compiler.AST
     {
         public ExpressionNode Expression { get; set; }
         public TypeReference TargetType { get; set; }
-        
+
         public CastExpressionNode(int line, int column) : base(line, column) { }
-        
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Lambda expression: Function(x) x * 2 or Sub(x) DoSomething(x)
+    /// </summary>
+    public class LambdaExpressionNode : ExpressionNode
+    {
+        public List<ParameterNode> Parameters { get; set; }
+        public ExpressionNode Body { get; set; }          // For expression lambdas
+        public BlockNode StatementBody { get; set; }      // For statement lambdas
+        public TypeReference ReturnType { get; set; }     // Optional return type
+        public bool IsFunction { get; set; }              // True for Function, false for Sub
+
+        public LambdaExpressionNode(int line, int column) : base(line, column)
+        {
+            Parameters = new List<ParameterNode>();
+            IsFunction = true;
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Collection initializer expression: { 1, 2, 3 }
+    /// </summary>
+    public class CollectionInitializerNode : ExpressionNode
+    {
+        public List<ExpressionNode> Elements { get; set; }
+        public TypeReference ElementType { get; set; }  // Inferred or explicit element type
+
+        public CollectionInitializerNode(int line, int column) : base(line, column)
+        {
+            Elements = new List<ExpressionNode>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Tuple literal expression: (1, "hello") or (x := 1, y := 2)
+    /// </summary>
+    public class TupleLiteralNode : ExpressionNode
+    {
+        public List<ExpressionNode> Elements { get; set; }
+        public List<string> ElementNames { get; set; }  // Optional named elements
+
+        public TupleLiteralNode(int line, int column) : base(line, column)
+        {
+            Elements = new List<ExpressionNode>();
+            ElementNames = new List<string>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Await expression: Await SomeAsyncMethod()
+    /// </summary>
+    public class AwaitExpressionNode : ExpressionNode
+    {
+        public ExpressionNode Expression { get; set; }
+
+        public AwaitExpressionNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Yield statement: Yield value or Yield Return value
+    /// </summary>
+    public class YieldStatementNode : StatementNode
+    {
+        public ExpressionNode Value { get; set; }
+        public bool IsBreak { get; set; }  // Yield Break vs Yield Return
+
+        public YieldStatementNode(int line, int column) : base(line, column) { }
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
 }

@@ -220,8 +220,48 @@ namespace BasicLang.Compiler.IR
         {
             WriteLine(comment.ToString());
         }
+
+        public void Visit(IRArrayAlloc arrayAlloc)
+        {
+            WriteLine(arrayAlloc.ToString());
+        }
+
+        public void Visit(IRArrayStore arrayStore)
+        {
+            WriteLine(arrayStore.ToString());
+        }
+
+        public void Visit(IRAwait awaitInst)
+        {
+            WriteLine(awaitInst.ToString());
+        }
+
+        public void Visit(IRYield yieldInst)
+        {
+            WriteLine(yieldInst.ToString());
+        }
+
+        public void Visit(IRNewObject newObj)
+        {
+            WriteLine(newObj.ToString());
+        }
+
+        public void Visit(IRInstanceMethodCall methodCall)
+        {
+            WriteLine(methodCall.ToString());
+        }
+
+        public void Visit(IRBaseMethodCall baseCall)
+        {
+            WriteLine(baseCall.ToString());
+        }
+
+        public void Visit(IRFieldAccess fieldAccess)
+        {
+            WriteLine(fieldAccess.ToString());
+        }
     }
-    
+
     /// <summary>
     /// Pretty printer for control flow graphs
     /// </summary>

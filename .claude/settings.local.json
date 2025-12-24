@@ -10,7 +10,23 @@
       "Bash(dotnet new:*)",
       "Bash(copy:*)",
       "Bash(Select-String -Pattern \"\\(error|warning CS0\\)\")",
-      "Bash(Select-String -Pattern \"Demo 13\" -Context 0,80)"
+      "Bash(Select-String -Pattern \"Demo 13\" -Context 0,80)",
+      "Bash(Select-String -Pattern \"Demo 16\" -Context 0,80)",
+      "Bash(dir \"C:\\\\Users\\\\melvi\\\\source\\\\repos\\\\BasicLang\" /s /b)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(echo -e \"10 * 5\\\\n\"\"Hello\"\" & \"\" World\"\"\\\\nSqrt\\(16\\)\\\\nexit\")",
+      "Bash(dotnet restore:*)",
+      "Bash(timeout 2 dotnet run:*)",
+      "Bash(npm install)",
+      "Bash(dir:*)",
+      "Bash(code:*)",
+      "Bash(timeout 5 dotnet run:*)",
+      "Bash(Select-String -Pattern \"Demo 20\" -Context 0,80)",
+      "Bash(Select-String -Pattern \"Demo 21\" -Context 0,80)",
+      "Bash(csc:*)",
+      "Bash(cat:*)",
+      "Bash(dotnet script eval:*)"
     ]
   }
 }

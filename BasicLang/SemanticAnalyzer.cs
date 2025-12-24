@@ -277,6 +277,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return _typeManager.ObjectType;
             }
 
+            // Handle nullable types
+            if (typeRef.IsNullable)
+            {
+                var nullableType = new TypeInfo($"{type.Name}?", TypeKind.Nullable);
+                nullableType.IsNullable = true;
+                nullableType.UnderlyingType = type;
+                return nullableType;
+            }
+
             return type;
         }
 
@@ -734,6 +743,56 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
+        public void Visit(ExternDeclarationNode node)
+        {
+            // Validate extern declaration
+            if (string.IsNullOrEmpty(node.Name))
+            {
+                Error("Extern declaration must have a name", node.Line, node.Column);
+                return;
+            }
+
+            // Validate parameters
+            foreach (var param in node.Parameters)
+            {
+                param.Accept(this);
+            }
+
+            // Determine return type
+            var returnType = _typeManager.GetType("Void");
+            if (node.IsFunction && node.ReturnType != null)
+            {
+                returnType = _typeManager.GetType(node.ReturnType.Name);
+                if (returnType == null)
+                {
+                    Error($"Unknown return type '{node.ReturnType.Name}' for extern '{node.Name}'", node.Line, node.Column);
+                    returnType = _typeManager.GetType("Void");
+                }
+            }
+
+            // Register extern as a function/sub in the symbol table
+            var symbolKind = node.IsFunction ? SymbolKind.Function : SymbolKind.Subroutine;
+            var externSymbol = new Symbol(node.Name, symbolKind, returnType, node.Line, node.Column)
+            {
+                ReturnType = returnType,
+                IsExtern = true,
+                ExternImplementations = new Dictionary<string, string>(node.PlatformImplementations)
+            };
+
+            // Add parameters to the symbol
+            foreach (var param in node.Parameters)
+            {
+                var paramType = _typeManager.GetType(param.Type?.Name ?? "Object");
+                var paramSymbol = new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column);
+                externSymbol.Parameters.Add(paramSymbol);
+            }
+
+            if (!_currentScope.Define(externSymbol))
+            {
+                Error($"Extern '{node.Name}' is already defined in this scope", node.Line, node.Column);
+            }
+        }
+
         public void Visit(UsingDirectiveNode node)
         {
             // Nothing to do - just for reference
@@ -742,6 +801,375 @@ namespace BasicLang.Compiler.SemanticAnalysis
         public void Visit(ImportDirectiveNode node)
         {
             // Nothing to do - just for reference
+        }
+
+        public void Visit(ConstructorNode node)
+        {
+            // Enter constructor scope
+            EnterScope("Constructor", ScopeKind.Function);
+
+            // Register parameters
+            foreach (var param in node.Parameters)
+            {
+                param.Accept(this);
+            }
+
+            // Validate base constructor call if present
+            if (node.BaseConstructorArgs.Count > 0)
+            {
+                foreach (var arg in node.BaseConstructorArgs)
+                {
+                    arg.Accept(this);
+                }
+                // TODO: Validate base constructor exists and arguments match
+            }
+
+            // Analyze body
+            if (node.Body != null)
+            {
+                node.Body.Accept(this);
+            }
+
+            ExitScope();
+        }
+
+        public void Visit(PropertyNode node)
+        {
+            // Validate property type
+            TypeInfo propertyType = null;
+            if (node.PropertyType != null)
+            {
+                propertyType = _typeManager.GetType(node.PropertyType.Name);
+                if (propertyType == null)
+                {
+                    Error($"Unknown property type '{node.PropertyType.Name}'", node.Line, node.Column);
+                }
+            }
+
+            // Analyze getter
+            if (node.Getter != null)
+            {
+                EnterScope($"get_{node.Name}", ScopeKind.Function);
+                node.Getter.Accept(this);
+                ExitScope();
+            }
+
+            // Analyze setter
+            if (node.Setter != null)
+            {
+                EnterScope($"set_{node.Name}", ScopeKind.Function);
+
+                // Register setter parameter (value)
+                if (node.SetterParameter != null)
+                {
+                    node.SetterParameter.Accept(this);
+                }
+                else
+                {
+                    // Create implicit 'value' parameter
+                    var valueSymbol = new Symbol("value", SymbolKind.Parameter, propertyType, node.Line, node.Column);
+                    _currentScope.Define(valueSymbol);
+                }
+
+                node.Setter.Accept(this);
+                ExitScope();
+            }
+        }
+
+        public void Visit(MyBaseExpressionNode node)
+        {
+            // MyBase refers to the base class
+            // Validate we're inside a class that has a base class
+            var classScope = _currentScope.GetClassScope();
+            if (classScope == null)
+            {
+                Error("MyBase can only be used within a class", node.Line, node.Column);
+                return;
+            }
+
+            var classType = classScope.ClassType;
+            if (classType == null || classType.BaseType == null)
+            {
+                Error("MyBase can only be used in a class that inherits from another class", node.Line, node.Column);
+            }
+
+            // Set node type to base class type
+            if (classType?.BaseType != null)
+            {
+                _nodeTypes[node] = classType.BaseType;
+            }
+        }
+
+        public void Visit(LambdaExpressionNode node)
+        {
+            // Create a scope for the lambda parameters
+            EnterScope("Lambda", ScopeKind.Function);
+
+            // Register parameters in the lambda scope
+            foreach (var param in node.Parameters)
+            {
+                var paramType = _typeManager.GetType(param.Type?.Name ?? "Object");
+                var paramSymbol = new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column);
+                _currentScope.Define(paramSymbol);
+            }
+
+            // Analyze the body
+            if (node.Body != null)
+            {
+                node.Body.Accept(this);
+                // For function lambdas, the return type is the type of the expression
+                if (node.IsFunction)
+                {
+                    var bodyType = GetNodeType(node.Body) ?? _typeManager.GetType("Object");
+                    // Create a delegate type for the lambda
+                    var delegateType = new TypeInfo($"Func<{bodyType.Name}>", TypeKind.Delegate);
+                    SetNodeType(node, delegateType);
+                }
+                else
+                {
+                    // Sub lambdas return void
+                    var delegateType = new TypeInfo("Action", TypeKind.Delegate);
+                    SetNodeType(node, delegateType);
+                }
+            }
+            else if (node.StatementBody != null)
+            {
+                node.StatementBody.Accept(this);
+                // Statement body lambdas with explicit return type or void
+                var returnType = node.ReturnType != null
+                    ? _typeManager.GetType(node.ReturnType.Name)
+                    : _typeManager.GetType("Void");
+                var delegateType = new TypeInfo($"Func<{returnType.Name}>", TypeKind.Delegate);
+                SetNodeType(node, delegateType);
+            }
+
+            ExitScope();
+        }
+
+        public void Visit(CollectionInitializerNode node)
+        {
+            TypeInfo commonType = null;
+
+            // Analyze each element
+            foreach (var element in node.Elements)
+            {
+                element.Accept(this);
+                var elementType = GetNodeType(element);
+
+                if (elementType != null)
+                {
+                    if (commonType == null)
+                    {
+                        commonType = elementType;
+                    }
+                    else if (!commonType.Equals(elementType))
+                    {
+                        // For mixed types, use Object
+                        Warning($"Collection contains mixed types: {commonType.Name} and {elementType.Name}", node.Line, node.Column);
+                        commonType = _typeManager.GetType("Object");
+                    }
+                }
+            }
+
+            // Set the type to array of the common element type
+            var arrayType = new TypeInfo($"{(commonType?.Name ?? "Object")}[]", TypeKind.Array);
+            arrayType.ElementType = commonType ?? _typeManager.GetType("Object");
+            SetNodeType(node, arrayType);
+        }
+
+        public void Visit(TupleLiteralNode node)
+        {
+            var elementTypes = new List<TypeInfo>();
+
+            // Analyze each element
+            foreach (var element in node.Elements)
+            {
+                element.Accept(this);
+                var elementType = GetNodeType(element) ?? _typeManager.GetType("Object");
+                elementTypes.Add(elementType);
+            }
+
+            // Create tuple type
+            var typeNames = string.Join(", ", elementTypes.Select(t => t.Name));
+            var tupleType = new TypeInfo($"({typeNames})", TypeKind.Tuple);
+            tupleType.TupleElementTypes = elementTypes;
+            tupleType.TupleElementNames = node.ElementNames.ToList();
+            SetNodeType(node, tupleType);
+        }
+
+        public void Visit(OperatorDeclarationNode node)
+        {
+            // Operators must be Shared/Static
+            if (!node.IsShared)
+            {
+                Warning("Operators must be Shared (static)", node.Line, node.Column);
+            }
+
+            // Create a scope for the operator body
+            EnterScope($"Operator {node.OperatorSymbol}", ScopeKind.Function);
+
+            // Register parameters
+            foreach (var param in node.Parameters)
+            {
+                var paramType = ResolveTypeReference(param.Type);
+                var paramSymbol = new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column);
+                _currentScope.Define(paramSymbol);
+            }
+
+            // Analyze the body
+            if (node.Body != null)
+            {
+                node.Body.Accept(this);
+            }
+
+            ExitScope();
+        }
+
+        public void Visit(EventDeclarationNode node)
+        {
+            // Resolve the event type (delegate type)
+            var eventType = node.EventType != null ? ResolveTypeReference(node.EventType) : _typeManager.GetType("EventHandler");
+
+            // Register the event as a symbol
+            var eventSymbol = new Symbol(node.Name, SymbolKind.Event, eventType, node.Line, node.Column);
+            _currentScope.Define(eventSymbol);
+        }
+
+        public void Visit(RaiseEventStatementNode node)
+        {
+            // Look up the event
+            var eventSymbol = _currentScope.Resolve(node.EventName);
+            if (eventSymbol == null)
+            {
+                Error($"Event '{node.EventName}' is not defined", node.Line, node.Column);
+            }
+
+            // Analyze arguments
+            foreach (var arg in node.Arguments)
+            {
+                arg.Accept(this);
+            }
+        }
+
+        public void Visit(AddHandlerStatementNode node)
+        {
+            // Analyze the event expression
+            node.EventExpression?.Accept(this);
+
+            // Analyze the handler expression
+            node.HandlerExpression?.Accept(this);
+        }
+
+        public void Visit(RemoveHandlerStatementNode node)
+        {
+            // Analyze the event expression
+            node.EventExpression?.Accept(this);
+
+            // Analyze the handler expression
+            node.HandlerExpression?.Accept(this);
+        }
+
+        public void Visit(TypePatternNode node)
+        {
+            // Resolve the match type
+            if (node.MatchType != null)
+            {
+                var resolvedType = ResolveTypeReference(node.MatchType);
+                if (resolvedType == null)
+                {
+                    Error($"Unknown type '{node.MatchType.Name}' in type pattern", node.Line, node.Column);
+                }
+            }
+
+            // If there's a variable binding, add it to scope
+            if (!string.IsNullOrEmpty(node.VariableName) && node.MatchType != null)
+            {
+                var resolvedType = ResolveTypeReference(node.MatchType);
+                if (resolvedType != null)
+                {
+                    var symbol = new Symbol(node.VariableName, SymbolKind.Variable, resolvedType, node.Line, node.Column);
+                    _currentScope.Define(symbol);
+                }
+            }
+
+            // Analyze When guard if present
+            node.WhenGuard?.Accept(this);
+        }
+
+        public void Visit(ConstantPatternNode node)
+        {
+            // Analyze the constant value
+            node.Value?.Accept(this);
+
+            // Analyze When guard if present
+            node.WhenGuard?.Accept(this);
+        }
+
+        public void Visit(RangePatternNode node)
+        {
+            // Analyze bounds
+            node.LowerBound?.Accept(this);
+            node.UpperBound?.Accept(this);
+
+            // Verify bounds are comparable
+            var lowerType = GetNodeType(node.LowerBound);
+            var upperType = GetNodeType(node.UpperBound);
+
+            if (lowerType != null && upperType != null)
+            {
+                if (!lowerType.IsNumeric() || !upperType.IsNumeric())
+                {
+                    Warning("Range pattern bounds should be numeric types", node.Line, node.Column);
+                }
+            }
+
+            // Analyze When guard if present
+            node.WhenGuard?.Accept(this);
+        }
+
+        public void Visit(ComparisonPatternNode node)
+        {
+            // Analyze the comparison value
+            node.Value?.Accept(this);
+
+            // Validate operator
+            var validOperators = new[] { ">", "<", ">=", "<=", "=", "<>" };
+            if (!validOperators.Contains(node.Operator))
+            {
+                Error($"Invalid comparison operator '{node.Operator}' in pattern", node.Line, node.Column);
+            }
+
+            // Analyze When guard if present
+            node.WhenGuard?.Accept(this);
+        }
+
+        public void Visit(AwaitExpressionNode node)
+        {
+            // Check that we're inside an async function
+            var funcScope = _currentScope.GetFunctionScope();
+            // Note: In a full implementation, we would check if the function has IsAsync set
+            // For now, just analyze the expression
+
+            node.Expression?.Accept(this);
+
+            // The expression should return a Task-like type
+            // For now, we'll trust the programmer
+        }
+
+        public void Visit(YieldStatementNode node)
+        {
+            // Check that we're inside an iterator function
+            var funcScope = _currentScope.GetFunctionScope();
+            if (funcScope == null)
+            {
+                Error("Yield statement must be inside a function", node.Line, node.Column);
+            }
+
+            // Analyze the value if not a yield break
+            if (!node.IsBreak && node.Value != null)
+            {
+                node.Value.Accept(this);
+            }
         }
 
         // ====================================================================
@@ -906,6 +1334,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
             ExitScope();
         }
 
+        public void Visit(WithStatementNode node)
+        {
+            // Analyze the object expression
+            node.Object.Accept(this);
+            var objectType = GetNodeType(node.Object);
+
+            // Create a scope for the With block where member access can be implicit
+            EnterScope("WithBlock", ScopeKind.Block);
+
+            // Store the With object type for implicit member access resolution
+            // (In a full implementation, we'd need to track this for .Property syntax)
+
+            node.Body.Accept(this);
+
+            ExitScope();
+        }
+
         public void Visit(WhileLoopNode node)
         {
             node.Condition.Accept(this);
@@ -955,13 +1400,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             EnterScope("Catch", ScopeKind.Block);
 
-            var exSymbol = new Symbol(node.ExceptionVariable, SymbolKind.Variable,
-                                     exceptionType, node.Line, node.Column);
-            _currentScope.Define(exSymbol);
+            if (!string.IsNullOrEmpty(node.ExceptionVariable))
+            {
+                var exSymbol = new Symbol(node.ExceptionVariable, SymbolKind.Variable,
+                                         exceptionType, node.Line, node.Column);
+                _currentScope.Define(exSymbol);
+            }
 
             node.Body.Accept(this);
 
             ExitScope();
+        }
+
+        public void Visit(ThrowStatementNode node)
+        {
+            if (node.Exception != null)
+            {
+                node.Exception.Accept(this);
+            }
         }
 
         public void Visit(ReturnStatementNode node)
@@ -1271,6 +1727,21 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             SetNodeType(node, type);
+        }
+
+        public void Visit(InterpolatedStringNode node)
+        {
+            // Analyze each expression part
+            foreach (var part in node.Parts)
+            {
+                if (part is ExpressionNode expr)
+                {
+                    expr.Accept(this);
+                }
+            }
+
+            // Interpolated strings always result in String type
+            SetNodeType(node, _typeManager.StringType);
         }
 
         public void Visit(IdentifierExpressionNode node)

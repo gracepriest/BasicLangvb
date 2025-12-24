@@ -49,6 +49,14 @@ namespace BasicLang.Compiler.IR
         void Visit(IRSwitch switchInst);
         void Visit(IRLabel label);
         void Visit(IRComment comment);
+        void Visit(IRArrayAlloc arrayAlloc);
+        void Visit(IRArrayStore arrayStore);
+        void Visit(IRAwait awaitInst);
+        void Visit(IRYield yieldInst);
+        void Visit(IRNewObject newObj);
+        void Visit(IRInstanceMethodCall methodCall);
+        void Visit(IRBaseMethodCall baseCall);
+        void Visit(IRFieldAccess fieldAccess);
     }
     
     // ============================================================================
@@ -540,10 +548,88 @@ namespace BasicLang.Compiler.IR
         }
         
         public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
-        
+
         public override string ToString() => $"; {Text}";
     }
-    
+
+    /// <summary>
+    /// Array allocation - allocates an array of a given size
+    /// </summary>
+    public class IRArrayAlloc : IRValue
+    {
+        public TypeInfo ElementType { get; set; }
+        public int Size { get; set; }
+
+        public IRArrayAlloc(string name, TypeInfo elementType, int size)
+            : base(name, new TypeInfo($"{elementType.Name}[]", TypeKind.Array) { ElementType = elementType })
+        {
+            ElementType = elementType;
+            Size = size;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+
+        public override string ToString() => $"{Name} = new {ElementType.Name}[{Size}]";
+    }
+
+    /// <summary>
+    /// Array store - stores a value at an index in an array
+    /// </summary>
+    public class IRArrayStore : IRInstruction
+    {
+        public IRValue Array { get; set; }
+        public IRValue Index { get; set; }
+        public IRValue Value { get; set; }
+
+        public IRArrayStore(IRValue array, IRValue index, IRValue value)
+        {
+            Array = array;
+            Index = index;
+            Value = value;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+
+        public override string ToString() => $"{Array.Name}[{Index}] = {Value}";
+    }
+
+    /// <summary>
+    /// IR Await - awaits an async expression
+    /// </summary>
+    public class IRAwait : IRValue
+    {
+        public IRValue Expression { get; set; }
+
+        public IRAwait(string resultName, IRValue expression, TypeInfo resultType)
+            : base(resultName, resultType)
+        {
+            Expression = expression;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+
+        public override string ToString() => $"{Name} = await {Expression}";
+    }
+
+    /// <summary>
+    /// IR Yield - yields a value from an iterator
+    /// </summary>
+    public class IRYield : IRInstruction
+    {
+        public IRValue Value { get; set; }
+        public bool IsBreak { get; set; }
+
+        public IRYield(IRValue value, bool isBreak = false)
+        {
+            Value = value;
+            IsBreak = isBreak;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+
+        public override string ToString() => IsBreak ? "yield break" : $"yield return {Value}";
+    }
+
     // ============================================================================
     // Basic Block and Function
     // ============================================================================
@@ -616,10 +702,13 @@ namespace BasicLang.Compiler.IR
         public BasicBlock EntryBlock { get; set; }
         public List<IRVariable> LocalVariables { get; set; }
         public bool IsExternal { get; set; }
-        
+        public List<string> GenericParameters { get; set; }
+        public bool IsAsync { get; set; }
+        public bool IsIterator { get; set; }
+
         private int _nextBlockId = 0;
         private int _nextTempId = 0;
-        
+
         public IRFunction(string name, TypeInfo returnType)
         {
             Name = name;
@@ -627,6 +716,7 @@ namespace BasicLang.Compiler.IR
             Parameters = new List<IRVariable>();
             Blocks = new List<BasicBlock>();
             LocalVariables = new List<IRVariable>();
+            GenericParameters = new List<string>();
         }
         
         public BasicBlock CreateBlock(string name = null)
@@ -670,22 +760,26 @@ namespace BasicLang.Compiler.IR
         public List<IRFunction> Functions { get; set; }
         public Dictionary<string, IRVariable> GlobalVariables { get; set; }
         public Dictionary<string, TypeInfo> Types { get; set; }
-        
+        public Dictionary<string, IRExternDeclaration> ExternDeclarations { get; set; }
+        public Dictionary<string, IRClass> Classes { get; set; }
+
         public IRModule(string name)
         {
             Name = name;
             Functions = new List<IRFunction>();
             GlobalVariables = new Dictionary<string, IRVariable>();
             Types = new Dictionary<string, TypeInfo>();
+            ExternDeclarations = new Dictionary<string, IRExternDeclaration>(StringComparer.OrdinalIgnoreCase);
+            Classes = new Dictionary<string, IRClass>(StringComparer.OrdinalIgnoreCase);
         }
-        
+
         public IRFunction CreateFunction(string name, TypeInfo returnType)
         {
             var function = new IRFunction(name, returnType);
             Functions.Add(function);
             return function;
         }
-        
+
         public IRVariable CreateGlobalVariable(string name, TypeInfo type)
         {
             var variable = new IRVariable(name, type)
@@ -695,5 +789,258 @@ namespace BasicLang.Compiler.IR
             GlobalVariables[name] = variable;
             return variable;
         }
+
+        /// <summary>
+        /// Check if a function is an extern
+        /// </summary>
+        public bool IsExtern(string name) => ExternDeclarations.ContainsKey(name);
+
+        /// <summary>
+        /// Get extern declaration by name
+        /// </summary>
+        public IRExternDeclaration GetExtern(string name)
+        {
+            ExternDeclarations.TryGetValue(name, out var externDecl);
+            return externDecl;
+        }
+    }
+
+    /// <summary>
+    /// Represents an extern (platform-native) function declaration
+    /// </summary>
+    public class IRExternDeclaration
+    {
+        public string Name { get; set; }
+        public bool IsFunction { get; set; }
+        public string ReturnType { get; set; }
+        public List<IRParameter> Parameters { get; set; }
+        public Dictionary<string, string> PlatformImplementations { get; set; }
+
+        public IRExternDeclaration()
+        {
+            Parameters = new List<IRParameter>();
+            PlatformImplementations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Get the implementation string for a specific platform
+        /// </summary>
+        public string GetImplementation(string platform)
+        {
+            if (PlatformImplementations.TryGetValue(platform, out var impl))
+                return impl;
+            return null;
+        }
+
+        /// <summary>
+        /// Check if this extern has an implementation for the given platform
+        /// </summary>
+        public bool HasImplementation(string platform)
+        {
+            return PlatformImplementations.ContainsKey(platform);
+        }
+    }
+
+    /// <summary>
+    /// Represents a parameter in an IR function or extern
+    /// </summary>
+    public class IRParameter
+    {
+        public string Name { get; set; }
+        public string TypeName { get; set; }
+        public TypeInfo Type { get; set; }
+    }
+
+    /// <summary>
+    /// Represents a class definition in IR
+    /// </summary>
+    public class IRClass
+    {
+        public string Name { get; set; }
+        public string BaseClass { get; set; }
+        public List<string> Interfaces { get; set; }
+        public List<IRField> Fields { get; set; }
+        public List<IRMethod> Methods { get; set; }
+        public List<IRProperty> Properties { get; set; }
+        public List<IRConstructor> Constructors { get; set; }
+        public List<string> GenericParameters { get; set; }
+
+        public IRClass(string name)
+        {
+            Name = name;
+            Interfaces = new List<string>();
+            Fields = new List<IRField>();
+            Methods = new List<IRMethod>();
+            Properties = new List<IRProperty>();
+            Constructors = new List<IRConstructor>();
+            GenericParameters = new List<string>();
+        }
+    }
+
+    /// <summary>
+    /// Represents a field in an IR class
+    /// </summary>
+    public class IRField
+    {
+        public string Name { get; set; }
+        public TypeInfo Type { get; set; }
+        public AccessModifier Access { get; set; }
+        public bool IsStatic { get; set; }
+        public IRValue Initializer { get; set; }
+    }
+
+    /// <summary>
+    /// Represents a method in an IR class
+    /// </summary>
+    public class IRMethod
+    {
+        public string Name { get; set; }
+        public TypeInfo ReturnType { get; set; }
+        public AccessModifier Access { get; set; }
+        public bool IsStatic { get; set; }
+        public bool IsVirtual { get; set; }
+        public bool IsOverride { get; set; }
+        public bool IsSealed { get; set; }
+        public List<IRVariable> Parameters { get; set; }
+        public IRFunction Implementation { get; set; }
+
+        public IRMethod()
+        {
+            Parameters = new List<IRVariable>();
+        }
+    }
+
+    /// <summary>
+    /// Represents a property in an IR class
+    /// </summary>
+    public class IRProperty
+    {
+        public string Name { get; set; }
+        public TypeInfo Type { get; set; }
+        public AccessModifier Access { get; set; }
+        public bool IsStatic { get; set; }
+        public bool IsReadOnly { get; set; }
+        public bool IsWriteOnly { get; set; }
+        public IRFunction Getter { get; set; }
+        public IRFunction Setter { get; set; }
+    }
+
+    /// <summary>
+    /// Represents a constructor in an IR class
+    /// </summary>
+    public class IRConstructor
+    {
+        public AccessModifier Access { get; set; }
+        public List<IRVariable> Parameters { get; set; }
+        public IRFunction Implementation { get; set; }
+        public List<IRValue> BaseConstructorArgs { get; set; }
+
+        public IRConstructor()
+        {
+            Parameters = new List<IRVariable>();
+            BaseConstructorArgs = new List<IRValue>();
+        }
+    }
+
+    /// <summary>
+    /// Represents a new object instantiation: new ClassName(args)
+    /// </summary>
+    public class IRNewObject : IRValue
+    {
+        public string ClassName { get; set; }
+        public List<IRValue> Arguments { get; set; }
+
+        public IRNewObject(string resultName, string className, TypeInfo type)
+            : base(resultName, type)
+        {
+            ClassName = className;
+            Arguments = new List<IRValue>();
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+        public override string ToString()
+        {
+            var args = string.Join(", ", Arguments.Select(a => a.Name));
+            return $"{Name} = new {ClassName}({args})";
+        }
+    }
+
+    /// <summary>
+    /// Represents a method call on an object instance: obj.Method(args)
+    /// </summary>
+    public class IRInstanceMethodCall : IRValue
+    {
+        public IRValue Object { get; set; }
+        public string MethodName { get; set; }
+        public List<IRValue> Arguments { get; set; }
+        public bool IsVirtual { get; set; }
+
+        public IRInstanceMethodCall(string resultName, IRValue obj, string methodName, TypeInfo returnType)
+            : base(resultName, returnType)
+        {
+            Object = obj;
+            MethodName = methodName;
+            Arguments = new List<IRValue>();
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+        public override string ToString()
+        {
+            var args = string.Join(", ", Arguments.Select(a => a.Name));
+            return $"{Name} = {Object.Name}.{MethodName}({args})";
+        }
+    }
+
+    /// <summary>
+    /// Represents a base class method call: base.Method(args) or MyBase.Method(args)
+    /// </summary>
+    public class IRBaseMethodCall : IRValue
+    {
+        public string MethodName { get; set; }
+        public List<IRValue> Arguments { get; set; }
+
+        public IRBaseMethodCall(string resultName, string methodName, TypeInfo returnType)
+            : base(resultName, returnType)
+        {
+            MethodName = methodName;
+            Arguments = new List<IRValue>();
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+        public override string ToString()
+        {
+            var args = string.Join(", ", Arguments.Select(a => a.Name));
+            return $"{Name} = base.{MethodName}({args})";
+        }
+    }
+
+    /// <summary>
+    /// Represents a field access on an object: obj.Field
+    /// </summary>
+    public class IRFieldAccess : IRValue
+    {
+        public IRValue Object { get; set; }
+        public string FieldName { get; set; }
+
+        public IRFieldAccess(string resultName, IRValue obj, string fieldName, TypeInfo type)
+            : base(resultName, type)
+        {
+            Object = obj;
+            FieldName = fieldName;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+        public override string ToString() => $"{Name} = {Object.Name}.{FieldName}";
+    }
+
+    /// <summary>
+    /// Access modifier for class members
+    /// </summary>
+    public enum AccessModifier
+    {
+        Public,
+        Private,
+        Protected,
+        Friend
     }
 }

@@ -1,0 +1,167 @@
+{
+  "name": "basiclang",
+  "displayName": "BasicLang",
+  "description": "Language support for BasicLang programming language",
+  "version": "0.1.0",
+  "publisher": "basiclang",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onLanguage:basiclang",
+    "onDebug",
+    "onDebugResolve:basiclang"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "basiclang",
+        "aliases": [
+          "BasicLang",
+          "basiclang",
+          "bas"
+        ],
+        "extensions": [
+          ".bas",
+          ".basic",
+          ".bl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "basiclang",
+        "scopeName": "source.basiclang",
+        "path": "./syntaxes/basiclang.tmLanguage.json"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "basiclang",
+        "scopes": {
+          "namespace": ["entity.name.namespace.basiclang"],
+          "type": ["entity.name.type.basiclang"],
+          "class": ["entity.name.type.class.basiclang"],
+          "enum": ["entity.name.type.enum.basiclang"],
+          "interface": ["entity.name.type.interface.basiclang"],
+          "struct": ["entity.name.type.struct.basiclang"],
+          "typeParameter": ["entity.name.type.parameter.basiclang"],
+          "parameter": ["variable.parameter.basiclang"],
+          "variable": ["variable.other.basiclang"],
+          "variable.readonly": ["variable.other.constant.basiclang"],
+          "property": ["variable.other.property.basiclang"],
+          "enumMember": ["variable.other.enummember.basiclang"],
+          "function": ["entity.name.function.basiclang"],
+          "function.defaultLibrary": ["support.function.builtin.basiclang"],
+          "method": ["entity.name.function.member.basiclang"],
+          "keyword": ["keyword.control.basiclang"],
+          "modifier": ["storage.modifier.basiclang"],
+          "comment": ["comment.basiclang"],
+          "string": ["string.quoted.double.basiclang"],
+          "number": ["constant.numeric.basiclang"],
+          "operator": ["keyword.operator.basiclang"]
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "basiclang.restartServer",
+        "title": "BasicLang: Restart Language Server"
+      },
+      {
+        "command": "basiclang.showOutput",
+        "title": "BasicLang: Show Output"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "BasicLang",
+      "properties": {
+        "basiclang.server.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the BasicLang compiler executable. If empty, uses 'dotnet run' in the project directory."
+        },
+        "basiclang.server.projectPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the BasicLang compiler project directory (for dotnet run)."
+        },
+        "basiclang.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server."
+        }
+      }
+    },
+    "breakpoints": [
+      {
+        "language": "basiclang"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "basiclang",
+        "label": "BasicLang Debug",
+        "languages": ["basiclang"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to the BasicLang file to debug",
+                "default": "${file}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop on the first line",
+                "default": true
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "basiclang",
+            "request": "launch",
+            "name": "Debug BasicLang",
+            "program": "${file}",
+            "stopOnEntry": true
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "BasicLang: Launch",
+            "description": "Launch and debug a BasicLang program",
+            "body": {
+              "type": "basiclang",
+              "request": "launch",
+              "name": "Debug BasicLang",
+              "program": "^\"${1:${file}}\"",
+              "stopOnEntry": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1",
+    "@vscode/debugadapter": "^1.65.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0"
+  }
+}

@@ -5,9 +5,9 @@ using BasicLang.Compiler.AST;
 
 namespace BasicLang.Test
 {
-    class ParserTests
+    public class ParserTests
     {
-        static void RunDemo(string[] args)
+        public static void Run()
         {
             Console.WriteLine("BasicLang Parser Test Suite\n");
             Console.WriteLine("=".PadRight(80, '='));
@@ -305,34 +305,105 @@ End Sub
 Namespace MathLibrary
     Class Calculator
         Private result As Double
-        
+
         Public Function Add(a As Double, b As Double) As Double
             result = a + b
             Return result
         End Function
-        
+
         Public Function Subtract(a As Double, b As Double) As Double
             result = a - b
             Return result
         End Function
     End Class
-    
+
     Module Utilities
         Function Average(arr[10] As Double) As Double
             Dim sum As Double = 0
             Dim count As Integer = 0
-            
+
             For i = 0 To 9
                 sum = sum + arr[i]
                 count++
             Next i
-            
+
             Return sum / count
         End Function
     End Module
 End Namespace
 ");
-            
+
+            RunTest("Async Function", @"
+Async Function FetchDataAsync(url As String) As String
+    Dim result As String
+    result = Await GetDataAsync(url)
+    Return result
+End Function
+");
+
+            RunTest("Async Subroutine", @"
+Async Sub ProcessAsync()
+    Dim data As String
+    data = Await FetchAsync()
+    PrintLine(data)
+End Sub
+");
+
+            RunTest("Multiple Await Expressions", @"
+Async Function CombineDataAsync() As String
+    Dim data1 As String
+    Dim data2 As String
+    data1 = Await FetchFirstAsync()
+    data2 = Await FetchSecondAsync()
+    Return data1 & data2
+End Function
+");
+
+            RunTest("Iterator Function", @"
+Iterator Function CountTo(max As Integer) As Integer
+    Dim i As Integer
+    For i = 1 To max
+        Yield i
+    Next i
+End Function
+");
+
+            RunTest("Iterator with Yield Return", @"
+Iterator Function GetNumbers() As Integer
+    Yield 1
+    Yield 2
+    Yield 3
+End Function
+");
+
+            RunTest("Iterator with Yield Exit", @"
+Iterator Function FindFirst(arr[10] As Integer, target As Integer) As Integer
+    Dim i As Integer
+    For i = 0 To 9
+        If arr[i] = target Then
+            Yield arr[i]
+            Yield Exit
+        End If
+    Next i
+End Function
+");
+
+            RunTest("Async and Iterator in Class", @"
+Class DataService
+    Public Async Function LoadAsync(id As Integer) As String
+        Dim result As String
+        result = Await QueryDatabaseAsync(id)
+        Return result
+    End Function
+
+    Public Iterator Function GetItems() As String
+        Yield ""Item1""
+        Yield ""Item2""
+        Yield ""Item3""
+    End Function
+End Class
+");
+
             Console.WriteLine("\n" + "=".PadRight(80, '='));
             Console.WriteLine("All parser tests completed!");
         }
@@ -415,11 +486,16 @@ End Namespace
                     break;
                     
                 case FunctionNode func:
-                    Console.WriteLine($"{indentStr}Function: {func.Name}({func.Parameters.Count} params) -> {func.ReturnType}");
+                    var funcModifiers = new List<string>();
+                    if (func.IsAsync) funcModifiers.Add("Async");
+                    if (func.IsIterator) funcModifiers.Add("Iterator");
+                    var funcModStr = funcModifiers.Count > 0 ? $"[{string.Join(", ", funcModifiers)}] " : "";
+                    Console.WriteLine($"{indentStr}{funcModStr}Function: {func.Name}({func.Parameters.Count} params) -> {func.ReturnType}");
                     break;
-                    
+
                 case SubroutineNode sub:
-                    Console.WriteLine($"{indentStr}Sub: {sub.Name}({sub.Parameters.Count} params)");
+                    var subModStr = sub.IsAsync ? "[Async] " : "";
+                    Console.WriteLine($"{indentStr}{subModStr}Sub: {sub.Name}({sub.Parameters.Count} params)");
                     break;
                     
                 case VariableDeclarationNode var:

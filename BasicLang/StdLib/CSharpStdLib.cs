@@ -7,7 +7,7 @@ namespace BasicLang.Compiler.StdLib.CSharp
     /// C# implementation of standard library functions
     /// Maps BasicLang stdlib to .NET BCL calls
     /// </summary>
-    public class CSharpStdLibProvider : IStdLibProvider, IStdIO, IStdString, IStdMath, IStdArray, IStdConversion
+    public class CSharpStdLibProvider : IStdLibProvider, IStdIO, IStdString, IStdMath, IStdArray, IStdConversion, IStdFileIO, IStdDateTime
     {
         private static readonly Dictionary<string, StdLibFunction> _functions = new Dictionary<string, StdLibFunction>(StringComparer.OrdinalIgnoreCase)
         {
@@ -16,6 +16,24 @@ namespace BasicLang.Compiler.StdLib.CSharp
             ["PrintLine"] = new StdLibFunction { Name = "PrintLine", Category = StdLibCategory.IO, ParameterTypes = new[] { "Object" }, ReturnType = "Void" },
             ["Input"] = new StdLibFunction { Name = "Input", Category = StdLibCategory.IO, ParameterTypes = new[] { "String" }, ReturnType = "String" },
             ["ReadLine"] = new StdLibFunction { Name = "ReadLine", Category = StdLibCategory.IO, ParameterTypes = Array.Empty<string>(), ReturnType = "String" },
+
+            // File I/O
+            ["FileRead"] = new StdLibFunction { Name = "FileRead", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String" }, ReturnType = "String" },
+            ["FileWrite"] = new StdLibFunction { Name = "FileWrite", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String", "String" }, ReturnType = "Void" },
+            ["FileAppend"] = new StdLibFunction { Name = "FileAppend", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String", "String" }, ReturnType = "Void" },
+            ["FileExists"] = new StdLibFunction { Name = "FileExists", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String" }, ReturnType = "Boolean" },
+            ["FileDelete"] = new StdLibFunction { Name = "FileDelete", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String" }, ReturnType = "Void" },
+            ["FileCopy"] = new StdLibFunction { Name = "FileCopy", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String", "String" }, ReturnType = "Void" },
+            ["FileMove"] = new StdLibFunction { Name = "FileMove", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String", "String" }, ReturnType = "Void" },
+            ["DirExists"] = new StdLibFunction { Name = "DirExists", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String" }, ReturnType = "Boolean" },
+            ["DirCreate"] = new StdLibFunction { Name = "DirCreate", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String" }, ReturnType = "Void" },
+            ["DirDelete"] = new StdLibFunction { Name = "DirDelete", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String" }, ReturnType = "Void" },
+            ["DirGetFiles"] = new StdLibFunction { Name = "DirGetFiles", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String" }, ReturnType = "String[]" },
+            ["DirGetDirs"] = new StdLibFunction { Name = "DirGetDirs", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String" }, ReturnType = "String[]" },
+            ["PathCombine"] = new StdLibFunction { Name = "PathCombine", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String", "String" }, ReturnType = "String" },
+            ["PathGetFileName"] = new StdLibFunction { Name = "PathGetFileName", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String" }, ReturnType = "String" },
+            ["PathGetDirectory"] = new StdLibFunction { Name = "PathGetDirectory", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String" }, ReturnType = "String" },
+            ["PathGetExtension"] = new StdLibFunction { Name = "PathGetExtension", Category = StdLibCategory.FileIO, ParameterTypes = new[] { "String" }, ReturnType = "String" },
 
             // String
             ["Len"] = new StdLibFunction { Name = "Len", Category = StdLibCategory.String, ParameterTypes = new[] { "String" }, ReturnType = "Integer" },
@@ -27,6 +45,10 @@ namespace BasicLang.Compiler.StdLib.CSharp
             ["Trim"] = new StdLibFunction { Name = "Trim", Category = StdLibCategory.String, ParameterTypes = new[] { "String" }, ReturnType = "String" },
             ["InStr"] = new StdLibFunction { Name = "InStr", Category = StdLibCategory.String, ParameterTypes = new[] { "String", "String" }, ReturnType = "Integer" },
             ["Replace"] = new StdLibFunction { Name = "Replace", Category = StdLibCategory.String, ParameterTypes = new[] { "String", "String", "String" }, ReturnType = "String" },
+            ["Split"] = new StdLibFunction { Name = "Split", Category = StdLibCategory.String, ParameterTypes = new[] { "String", "String" }, ReturnType = "String[]" },
+            ["Join"] = new StdLibFunction { Name = "Join", Category = StdLibCategory.String, ParameterTypes = new[] { "String[]", "String" }, ReturnType = "String" },
+            ["Chr"] = new StdLibFunction { Name = "Chr", Category = StdLibCategory.String, ParameterTypes = new[] { "Integer" }, ReturnType = "String" },
+            ["Asc"] = new StdLibFunction { Name = "Asc", Category = StdLibCategory.String, ParameterTypes = new[] { "String" }, ReturnType = "Integer" },
 
             // Math
             ["Abs"] = new StdLibFunction { Name = "Abs", Category = StdLibCategory.Math, ParameterTypes = new[] { "Double" }, ReturnType = "Double" },
@@ -56,6 +78,19 @@ namespace BasicLang.Compiler.StdLib.CSharp
             ["CSng"] = new StdLibFunction { Name = "CSng", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Single" },
             ["CStr"] = new StdLibFunction { Name = "CStr", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "String" },
             ["CBool"] = new StdLibFunction { Name = "CBool", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Boolean" },
+
+            // DateTime
+            ["Now"] = new StdLibFunction { Name = "Now", Category = StdLibCategory.DateTime, ParameterTypes = Array.Empty<string>(), ReturnType = "DateTime" },
+            ["Today"] = new StdLibFunction { Name = "Today", Category = StdLibCategory.DateTime, ParameterTypes = Array.Empty<string>(), ReturnType = "DateTime" },
+            ["Year"] = new StdLibFunction { Name = "Year", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime" }, ReturnType = "Integer" },
+            ["Month"] = new StdLibFunction { Name = "Month", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime" }, ReturnType = "Integer" },
+            ["Day"] = new StdLibFunction { Name = "Day", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime" }, ReturnType = "Integer" },
+            ["Hour"] = new StdLibFunction { Name = "Hour", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime" }, ReturnType = "Integer" },
+            ["Minute"] = new StdLibFunction { Name = "Minute", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime" }, ReturnType = "Integer" },
+            ["Second"] = new StdLibFunction { Name = "Second", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime" }, ReturnType = "Integer" },
+            ["DateAdd"] = new StdLibFunction { Name = "DateAdd", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime", "String", "Integer" }, ReturnType = "DateTime" },
+            ["DateDiff"] = new StdLibFunction { Name = "DateDiff", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime", "DateTime", "String" }, ReturnType = "Integer" },
+            ["FormatDate"] = new StdLibFunction { Name = "FormatDate", Category = StdLibCategory.DateTime, ParameterTypes = new[] { "DateTime", "String" }, ReturnType = "String" },
         };
 
         public bool CanHandle(string functionName) => _functions.ContainsKey(functionName);
@@ -68,10 +103,12 @@ namespace BasicLang.Compiler.StdLib.CSharp
             return func.Category switch
             {
                 StdLibCategory.IO => EmitIOCall(functionName, arguments),
+                StdLibCategory.FileIO => EmitFileIOCall(functionName, arguments),
                 StdLibCategory.String => EmitStringCall(functionName, arguments),
                 StdLibCategory.Math => EmitMathCall(functionName, arguments),
                 StdLibCategory.Array => EmitArrayCall(functionName, arguments),
                 StdLibCategory.Conversion => EmitConversionCall(functionName, arguments),
+                StdLibCategory.DateTime => EmitDateTimeCall(functionName, arguments),
                 _ => null
             };
         }
@@ -85,6 +122,9 @@ namespace BasicLang.Compiler.StdLib.CSharp
 
             if (func.Category == StdLibCategory.Math)
                 yield return "System.Math";
+
+            if (func.Category == StdLibCategory.FileIO)
+                yield return "System.IO";
         }
 
         public string GetInlineImplementation(string functionName)
@@ -129,6 +169,10 @@ namespace BasicLang.Compiler.StdLib.CSharp
                 "trim" => EmitTrim(args[0]),
                 "instr" => EmitInStr(args[0], args[1]),
                 "replace" => EmitReplace(args[0], args[1], args[2]),
+                "split" => EmitSplit(args[0], args[1]),
+                "join" => EmitJoin(args[0], args[1]),
+                "chr" => EmitChr(args[0]),
+                "asc" => EmitAsc(args[0]),
                 _ => null
             };
         }
@@ -142,6 +186,10 @@ namespace BasicLang.Compiler.StdLib.CSharp
         public string EmitTrim(string str) => $"{str}.Trim()";
         public string EmitInStr(string str, string search) => $"({str}.IndexOf({search}) + 1)";
         public string EmitReplace(string str, string find, string replaceWith) => $"{str}.Replace({find}, {replaceWith})";
+        public string EmitSplit(string str, string delimiter) => $"{str}.Split({delimiter})";
+        public string EmitJoin(string array, string delimiter) => $"string.Join({delimiter}, {array})";
+        public string EmitChr(string code) => $"((char){code}).ToString()";
+        public string EmitAsc(string str) => $"(int){str}[0]";
 
         #endregion
 
@@ -238,6 +286,90 @@ namespace BasicLang.Compiler.StdLib.CSharp
         public string EmitCStr(string value) => $"Convert.ToString({value})";
         public string EmitCBool(string value) => $"Convert.ToBoolean({value})";
         public string EmitCChar(string value) => $"Convert.ToChar({value})";
+
+        #endregion
+
+        #region File I/O Emissions
+
+        private string EmitFileIOCall(string functionName, string[] args)
+        {
+            return functionName.ToLower() switch
+            {
+                "fileread" => EmitFileRead(args[0]),
+                "filewrite" => EmitFileWrite(args[0], args[1]),
+                "fileappend" => EmitFileAppend(args[0], args[1]),
+                "fileexists" => EmitFileExists(args[0]),
+                "filedelete" => EmitFileDelete(args[0]),
+                "filecopy" => EmitFileCopy(args[0], args[1]),
+                "filemove" => EmitFileMove(args[0], args[1]),
+                "direxists" => EmitDirExists(args[0]),
+                "dircreate" => EmitDirCreate(args[0]),
+                "dirdelete" => EmitDirDelete(args[0]),
+                "dirgetfiles" => EmitDirGetFiles(args[0]),
+                "dirgetdirs" => EmitDirGetDirs(args[0]),
+                "pathcombine" => EmitPathCombine(args[0], args[1]),
+                "pathgetfilename" => EmitPathGetFileName(args[0]),
+                "pathgetdirectory" => EmitPathGetDirectory(args[0]),
+                "pathgetextension" => EmitPathGetExtension(args[0]),
+                _ => null
+            };
+        }
+
+        public string EmitFileRead(string path) => $"File.ReadAllText({path})";
+        public string EmitFileWrite(string path, string content) => $"File.WriteAllText({path}, {content})";
+        public string EmitFileAppend(string path, string content) => $"File.AppendAllText({path}, {content})";
+        public string EmitFileExists(string path) => $"File.Exists({path})";
+        public string EmitFileDelete(string path) => $"File.Delete({path})";
+        public string EmitFileCopy(string source, string dest) => $"File.Copy({source}, {dest}, true)";
+        public string EmitFileMove(string source, string dest) => $"File.Move({source}, {dest}, true)";
+
+        public string EmitDirExists(string path) => $"Directory.Exists({path})";
+        public string EmitDirCreate(string path) => $"Directory.CreateDirectory({path})";
+        public string EmitDirDelete(string path) => $"Directory.Delete({path}, true)";
+        public string EmitDirGetFiles(string path) => $"Directory.GetFiles({path})";
+        public string EmitDirGetDirs(string path) => $"Directory.GetDirectories({path})";
+
+        public string EmitPathCombine(string path1, string path2) => $"Path.Combine({path1}, {path2})";
+        public string EmitPathGetFileName(string path) => $"Path.GetFileName({path})";
+        public string EmitPathGetDirectory(string path) => $"Path.GetDirectoryName({path})";
+        public string EmitPathGetExtension(string path) => $"Path.GetExtension({path})";
+
+        #endregion
+
+        #region DateTime Emissions
+
+        private string EmitDateTimeCall(string functionName, string[] args)
+        {
+            return functionName.ToLower() switch
+            {
+                "now" => EmitNow(),
+                "today" => EmitToday(),
+                "year" => EmitYear(args[0]),
+                "month" => EmitMonth(args[0]),
+                "day" => EmitDay(args[0]),
+                "hour" => EmitHour(args[0]),
+                "minute" => EmitMinute(args[0]),
+                "second" => EmitSecond(args[0]),
+                "dateadd" => EmitDateAdd(args[0], args[1], args[2]),
+                "datediff" => EmitDateDiff(args[0], args[1], args[2]),
+                "formatdate" => EmitFormatDate(args[0], args[1]),
+                _ => null
+            };
+        }
+
+        public string EmitNow() => "DateTime.Now";
+        public string EmitToday() => "DateTime.Today";
+        public string EmitYear(string date) => $"{date}.Year";
+        public string EmitMonth(string date) => $"{date}.Month";
+        public string EmitDay(string date) => $"{date}.Day";
+        public string EmitHour(string date) => $"{date}.Hour";
+        public string EmitMinute(string date) => $"{date}.Minute";
+        public string EmitSecond(string date) => $"{date}.Second";
+        public string EmitDateAdd(string date, string interval, string number) =>
+            $"({interval}.ToLower() switch {{ \"d\" => {date}.AddDays({number}), \"m\" => {date}.AddMonths({number}), \"y\" => {date}.AddYears({number}), \"h\" => {date}.AddHours({number}), \"n\" => {date}.AddMinutes({number}), \"s\" => {date}.AddSeconds({number}), _ => {date} }})";
+        public string EmitDateDiff(string date1, string date2, string interval) =>
+            $"({interval}.ToLower() switch {{ \"d\" => (int)({date2} - {date1}).TotalDays, \"m\" => (({date2}.Year - {date1}.Year) * 12 + {date2}.Month - {date1}.Month), \"y\" => {date2}.Year - {date1}.Year, \"h\" => (int)({date2} - {date1}).TotalHours, \"n\" => (int)({date2} - {date1}).TotalMinutes, \"s\" => (int)({date2} - {date1}).TotalSeconds, _ => 0 }})";
+        public string EmitFormatDate(string date, string format) => $"{date}.ToString({format})";
 
         #endregion
     }
