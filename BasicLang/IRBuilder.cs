@@ -179,10 +179,17 @@ namespace BasicLang.Compiler.IR
             _currentFunction.IsAsync = node.IsAsync;
             _currentFunction.IsIterator = node.IsIterator;
 
-            // Copy generic parameters
+            // Copy generic parameters and constraints
             foreach (var genericParam in node.GenericParameters)
             {
                 _currentFunction.GenericParameters.Add(genericParam);
+            }
+            if (node.GenericTypeParams != null)
+            {
+                foreach (var typeParam in node.GenericTypeParams)
+                {
+                    _currentFunction.GenericTypeParams.Add(typeParam);
+                }
             }
 
             // Create parameters
@@ -244,10 +251,17 @@ namespace BasicLang.Compiler.IR
             // Set async flag
             _currentFunction.IsAsync = node.IsAsync;
 
-            // Copy generic parameters
+            // Copy generic parameters and constraints
             foreach (var genericParam in node.GenericParameters)
             {
                 _currentFunction.GenericParameters.Add(genericParam);
+            }
+            if (node.GenericTypeParams != null)
+            {
+                foreach (var typeParam in node.GenericTypeParams)
+                {
+                    _currentFunction.GenericTypeParams.Add(typeParam);
+                }
             }
 
             // Create parameters
@@ -379,6 +393,49 @@ namespace BasicLang.Compiler.IR
             }
         }
 
+        public void Visit(TupleDeconstructionNode node)
+        {
+            // Evaluate the tuple expression
+            node.Initializer.Accept(this);
+            var tupleValue = _expressionResult;
+
+            // Get the tuple type
+            var tupleType = _semanticAnalyzer.GetNodeType(node.Initializer);
+
+            // Create local variables for each element and emit deconstruction
+            for (int i = 0; i < node.Variables.Count; i++)
+            {
+                var (varName, varTypeRef) = node.Variables[i];
+
+                // Determine the type - from explicit type or inferred from tuple
+                TypeInfo varType;
+                if (varTypeRef != null)
+                {
+                    varType = new TypeInfo(varTypeRef.Name, TypeKind.Primitive);
+                }
+                else if (tupleType?.TupleElementTypes != null && i < tupleType.TupleElementTypes.Count)
+                {
+                    varType = tupleType.TupleElementTypes[i];
+                }
+                else
+                {
+                    varType = new TypeInfo("Object", TypeKind.Class);
+                }
+
+                // Create the local variable
+                var localVar = CreateVariable(varName, varType, _nextVersion++);
+                PushVariableVersion(varName, localVar);
+                _currentFunction.LocalVariables.Add(localVar);
+
+                // Emit instruction to get tuple element
+                var elementAccess = new IRTupleElement(tupleValue, i, varType)
+                {
+                    Name = localVar.Name
+                };
+                EmitInstruction(elementAccess);
+            }
+        }
+
         public void Visit(ConstantDeclarationNode node)
         {
             // Constants are typically inlined during expression evaluation
@@ -408,10 +465,17 @@ namespace BasicLang.Compiler.IR
                 IsAbstract = node.IsAbstract
             };
 
-            // Copy generic parameters
+            // Copy generic parameters and constraints
             foreach (var genericParam in node.GenericParameters)
             {
                 irClass.GenericParameters.Add(genericParam);
+            }
+            if (node.GenericTypeParams != null)
+            {
+                foreach (var typeParam in node.GenericTypeParams)
+                {
+                    irClass.GenericTypeParams.Add(typeParam);
+                }
             }
 
             foreach (var iface in node.Interfaces)
@@ -1640,12 +1704,22 @@ namespace BasicLang.Compiler.IR
                 var caseBlock = _currentFunction.CreateBlock($"switch_case_{caseIndex++}");
                 caseBlocks.Add(caseBlock);
 
-                // Add case values
+                // Add case values (simple constant matching)
                 foreach (var caseValue in caseClause.Values)
                 {
                     caseValue.Accept(this);
                     var value = _expressionResult;
                     switchInst.Cases.Add((value, caseBlock));
+                }
+
+                // Add pattern cases
+                foreach (var pattern in caseClause.Patterns)
+                {
+                    var patternCase = ConvertPatternToIR(pattern, caseBlock);
+                    if (patternCase != null)
+                    {
+                        switchInst.PatternCases.Add(patternCase);
+                    }
                 }
             }
 
@@ -1681,6 +1755,40 @@ namespace BasicLang.Compiler.IR
             }
 
             _currentBlock = endBlock;
+        }
+
+        private IRPatternCase ConvertPatternToIR(PatternNode pattern, BasicBlock target)
+        {
+            switch (pattern)
+            {
+                case TypePatternNode typePattern:
+                    var typeCase = new IRTypePatternCase(
+                        typePattern.MatchType?.Name ?? "Object",
+                        target
+                    );
+                    typeCase.BindingVariable = typePattern.VariableName;
+                    return typeCase;
+
+                case RangePatternNode rangePattern:
+                    rangePattern.LowerBound.Accept(this);
+                    var lower = _expressionResult;
+                    rangePattern.UpperBound.Accept(this);
+                    var upper = _expressionResult;
+                    return new IRRangePatternCase(lower, upper, target);
+
+                case ComparisonPatternNode compPattern:
+                    compPattern.Value.Accept(this);
+                    var compValue = _expressionResult;
+                    return new IRComparisonPatternCase(compPattern.Operator, compValue, target);
+
+                case ConstantPatternNode constPattern:
+                    constPattern.Value.Accept(this);
+                    var constValue = _expressionResult;
+                    return new IRConstantPatternCase(constValue, target);
+
+                default:
+                    return null;
+            }
         }
 
         public void Visit(CaseClauseNode node)

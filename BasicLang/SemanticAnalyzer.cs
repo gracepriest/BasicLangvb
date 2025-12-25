@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using BasicLang.Compiler.AST;
+using BasicLang.Compiler;
 
 namespace BasicLang.Compiler.SemanticAnalysis
 {
@@ -16,9 +17,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private readonly Dictionary<ASTNode, TypeInfo> _nodeTypes;
         private readonly Dictionary<ASTNode, Symbol> _nodeSymbols;
         private bool _inStaticContext;
+        private readonly ErrorContext _errorContext;
+
+        // Module system fields
+        private ModuleRegistry _moduleRegistry;
+        private ModuleResolver _moduleResolver;
+        private CompilationUnit _currentUnit;
 
         public List<SemanticError> Errors => _errors;
         public Scope GlobalScope { get; private set; }
+        public ErrorContext ErrorContext => _errorContext;
 
         public SemanticAnalyzer()
         {
@@ -27,7 +35,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _nodeTypes = new Dictionary<ASTNode, TypeInfo>();
             _nodeSymbols = new Dictionary<ASTNode, Symbol>();
             _inStaticContext = false;
+            _errorContext = new ErrorContext();
         }
+
+        /// <summary>
+        /// Configure the module system for multi-file compilation
+        /// </summary>
+        public void ConfigureModuleSystem(ModuleRegistry registry, ModuleResolver resolver, CompilationUnit currentUnit)
+        {
+            _moduleRegistry = registry;
+            _moduleResolver = resolver;
+            _currentUnit = currentUnit;
+        }
+
+        /// <summary>
+        /// Get the current compilation unit
+        /// </summary>
+        public CompilationUnit CurrentUnit => _currentUnit;
 
         public bool Analyze(ProgramNode program)
         {
@@ -220,12 +244,37 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         private void Error(string message, int line, int column)
         {
-            _errors.Add(new SemanticError(message, line, column));
+            // Add context to error message if available
+            var contextualMessage = _errorContext.FormatErrorWithContext(message);
+            _errors.Add(new SemanticError(contextualMessage, line, column));
+        }
+
+        private void ErrorWithPoisoning(string message, int line, int column, string symbolName)
+        {
+            // Record the error and poison the symbol to prevent cascade errors
+            Error(message, line, column);
+            if (!string.IsNullOrEmpty(symbolName))
+            {
+                _errorContext.PoisonSymbol(symbolName);
+            }
+        }
+
+        private bool IsSymbolPoisoned(string symbolName)
+        {
+            return _errorContext.IsSymbolPoisoned(symbolName);
         }
 
         private void Warning(string message, int line, int column)
         {
             _errors.Add(new SemanticError(message, line, column, ErrorSeverity.Warning));
+        }
+
+        /// <summary>
+        /// Get grouped errors for better error reporting
+        /// </summary>
+        public List<ErrorGroup> GetGroupedErrors()
+        {
+            return ErrorGrouper.GroupErrors(_errors);
         }
 
         private Scope EnterScope(string name, ScopeKind kind)
@@ -855,6 +904,40 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
+        public void Visit(TupleDeconstructionNode node)
+        {
+            // Analyze the initializer
+            node.Initializer.Accept(this);
+            var initType = GetNodeType(node.Initializer);
+
+            // Define each variable in the tuple
+            for (int i = 0; i < node.Variables.Count; i++)
+            {
+                var (varName, varTypeRef) = node.Variables[i];
+
+                TypeInfo varType;
+                if (varTypeRef != null)
+                {
+                    varType = ResolveTypeReference(varTypeRef);
+                }
+                else if (initType?.TupleElementTypes != null && i < initType.TupleElementTypes.Count)
+                {
+                    varType = initType.TupleElementTypes[i];
+                }
+                else
+                {
+                    varType = _typeManager.ObjectType;
+                }
+
+                var symbol = new Symbol(varName, SymbolKind.Variable, varType, node.Line, node.Column);
+
+                if (!_currentScope.Define(symbol))
+                {
+                    Error($"Variable '{varName}' is already defined in this scope", node.Line, node.Column);
+                }
+            }
+        }
+
         public void Visit(ConstantDeclarationNode node)
         {
             var constType = ResolveTypeReference(node.Type);
@@ -1007,12 +1090,89 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(UsingDirectiveNode node)
         {
-            // Nothing to do - just for reference
+            // Track the using directive for module resolution
+            if (_moduleRegistry != null && _currentUnit != null)
+            {
+                var usingInfo = new UsingInfo(node.Namespace, node.Line, node.Column);
+                _currentUnit.Usings.Add(usingInfo);
+
+                // Resolve namespace and import symbols
+                var files = _moduleResolver?.ResolveNamespace(node.Namespace, _currentUnit.FilePath);
+                if (files != null && files.Count > 0)
+                {
+                    usingInfo.ResolvedPaths.AddRange(files);
+
+                    // Import symbols from each file
+                    foreach (var file in files)
+                    {
+                        ImportSymbolsFromFile(file, node.Line, node.Column);
+                    }
+                }
+            }
         }
 
         public void Visit(ImportDirectiveNode node)
         {
-            // Nothing to do - just for reference
+            // Track the import directive for module resolution
+            if (_moduleRegistry != null && _currentUnit != null)
+            {
+                var importInfo = new ImportInfo(node.Module, node.Line, node.Column);
+                _currentUnit.Imports.Add(importInfo);
+
+                // Resolve the module path
+                var resolvedPath = _moduleResolver?.ResolveModule(node.Module, _currentUnit.FilePath);
+                if (resolvedPath != null)
+                {
+                    importInfo.ResolvedPath = resolvedPath;
+                    _currentUnit.Dependencies.Add(ModuleResolver.GetModuleId(resolvedPath));
+
+                    // Import symbols from the module
+                    ImportSymbolsFromFile(resolvedPath, node.Line, node.Column);
+                }
+                else
+                {
+                    Error($"Cannot resolve import '{node.Module}'", node.Line, node.Column);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Import public symbols from a compiled module
+        /// </summary>
+        private void ImportSymbolsFromFile(string filePath, int line, int column)
+        {
+            if (_moduleRegistry == null) return;
+
+            var moduleId = ModuleResolver.GetModuleId(filePath);
+            var unit = _moduleRegistry.Get(moduleId);
+
+            if (unit == null || !unit.IsComplete)
+            {
+                // Module hasn't been compiled yet - this will be handled by the Compiler
+                return;
+            }
+
+            // Import exported symbols into current scope
+            foreach (var symbol in unit.ExportedSymbols)
+            {
+                // Only import if not already defined
+                if (_currentScope.Resolve(symbol.Name) == null)
+                {
+                    // Clone the symbol for the current scope
+                    var importedSymbol = new Symbol(
+                        symbol.Name,
+                        symbol.Kind,
+                        symbol.Type,
+                        line,
+                        column)
+                    {
+                        IsImported = true,
+                        SourceModule = unit.ModuleName
+                    };
+
+                    _currentScope.Define(importedSymbol);
+                }
+            }
         }
 
         public void Visit(ConstructorNode node)

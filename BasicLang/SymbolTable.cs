@@ -191,6 +191,10 @@ public class TypeInfo
         public bool IsExtern { get; set; }
         public Dictionary<string, string> ExternImplementations { get; set; }
 
+        // For imported symbols (from other modules)
+        public bool IsImported { get; set; }
+        public string SourceModule { get; set; }
+
         public Symbol(string name, SymbolKind kind, TypeInfo type, int line, int column)
         {
             Name = name;

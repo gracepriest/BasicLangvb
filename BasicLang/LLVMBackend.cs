@@ -64,6 +64,45 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             _typeMap["ULong"] = "i64";
         }
 
+        /// <summary>
+        /// Override MapType to handle generic type parameters and LLVM-specific types
+        /// </summary>
+        protected override string MapType(TypeInfo type)
+        {
+            if (type == null) return "i8*";
+
+            // Check if this is a generic type parameter (single uppercase letter)
+            if (type.Name.Length == 1 && char.IsUpper(type.Name[0]))
+            {
+                return "i8*";  // Generic type parameters are treated as pointers
+            }
+
+            // Check for array types
+            if (type.Kind == TypeKind.Array)
+            {
+                var elemType = type.ElementType != null ? MapType(type.ElementType) : "i8*";
+                return $"{elemType}*";  // Arrays are pointers in LLVM
+            }
+
+            // Check type map first
+            if (_typeMap.TryGetValue(type.Name, out var mapped))
+                return mapped;
+
+            // Class types are pointers
+            if (type.Kind == TypeKind.Class || type.Kind == TypeKind.Interface)
+            {
+                var className = SanitizeLLVMName(type.Name);
+                if (_classStructTypes.ContainsKey(type.Name))
+                {
+                    return $"{_classStructTypes[type.Name]}*";
+                }
+                return $"%class.{className}*";
+            }
+
+            // Default to pointer type for unknown types
+            return "i8*";
+        }
+
         public override string Generate(IRModule module)
         {
             _module = module;
@@ -213,6 +252,12 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             var fieldNames = new List<string>();
             var fieldIndices = new Dictionary<string, int>();
 
+            // Comment for abstract classes
+            if (irClass.IsAbstract)
+            {
+                WriteLine($"; Abstract class - cannot be instantiated directly");
+            }
+
             int fieldIndex = 0;
 
             // Collect virtual methods
@@ -269,7 +314,23 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             var structType = $"{{ {structBody} }}";
             _classStructTypes[irClass.Name] = $"%class.{className}";
 
-            WriteLine($"%class.{className} = type {structType}");
+            // Add generic type parameters as comment/metadata
+            var genericComment = "";
+            if (irClass.GenericParameters != null && irClass.GenericParameters.Count > 0)
+            {
+                genericComment = $" ; generic<{string.Join(", ", irClass.GenericParameters)}>";
+            }
+            else if (irClass.GenericTypeParams != null && irClass.GenericTypeParams.Count > 0)
+            {
+                var genericParamStrings = irClass.GenericTypeParams.Select(p =>
+                {
+                    var constraints = p.Constraints?.Select(c => c.Kind.ToString()).ToList() ?? new List<string>();
+                    return constraints.Count > 0 ? $"{p.Name}: {string.Join("+", constraints)}" : p.Name;
+                });
+                genericComment = $" ; generic<{string.Join(", ", genericParamStrings)}>";
+            }
+
+            WriteLine($"%class.{className} = type {structType}{genericComment}");
         }
 
         private void GenerateVtableType(IRClass irClass)
@@ -385,6 +446,64 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             };
         }
 
+        /// <summary>
+        /// Get LLVM linkage based on access modifier
+        /// </summary>
+        private string GetLLVMLinkage(AccessModifier access)
+        {
+            return access switch
+            {
+                AccessModifier.Private => "private ",
+                AccessModifier.Protected => "internal ",  // LLVM doesn't have protected, use internal
+                AccessModifier.Friend => "internal ",     // Module-level visibility
+                _ => ""  // Public - default external linkage
+            };
+        }
+
+        /// <summary>
+        /// Get operator symbol from op_ prefixed function name
+        /// </summary>
+        private string GetOperatorSymbol(string funcName)
+        {
+            // Extract the operator name after op_
+            var opIndex = funcName.IndexOf("op_");
+            if (opIndex < 0) return null;
+
+            var opName = funcName.Substring(opIndex + 3);
+            // Remove any trailing parts (like parameter suffix)
+            var dotIndex = opName.IndexOf('.');
+            if (dotIndex >= 0) opName = opName.Substring(0, dotIndex);
+
+            return opName switch
+            {
+                "Addition" => "+",
+                "Subtraction" => "-",
+                "Multiply" => "*",
+                "Division" => "/",
+                "Modulus" => "%",
+                "Equality" => "==",
+                "Inequality" => "!=",
+                "LessThan" => "<",
+                "GreaterThan" => ">",
+                "LessThanOrEqual" => "<=",
+                "GreaterThanOrEqual" => ">=",
+                "BitwiseAnd" => "&",
+                "BitwiseOr" => "|",
+                "ExclusiveOr" => "^",
+                "LeftShift" => "<<",
+                "RightShift" => ">>",
+                "UnaryNegation" => "-",
+                "UnaryPlus" => "+",
+                "LogicalNot" => "!",
+                "OnesComplement" => "~",
+                "Increment" => "++",
+                "Decrement" => "--",
+                "Implicit" => "implicit",
+                "Explicit" => "explicit",
+                _ => opName
+            };
+        }
+
         private void GenerateInterfaceVtable(IRInterface irInterface)
         {
             var interfaceName = SanitizeLLVMName(irInterface.Name);
@@ -439,6 +558,61 @@ namespace BasicLang.Compiler.CodeGen.LLVM
                     GeneratePropertySetter(irClass, prop);
                     WriteLine();
                 }
+            }
+
+            // Generate event add/remove handlers
+            foreach (var evt in irClass.Events)
+            {
+                GenerateEventHandlers(irClass, evt);
+                WriteLine();
+            }
+        }
+
+        private void GenerateEventHandlers(IRClass irClass, IREvent evt)
+        {
+            var className = SanitizeLLVMName(irClass.Name);
+            var eventName = SanitizeLLVMName(evt.Name);
+            var structType = _classStructTypes.GetValueOrDefault(irClass.Name, $"%class.{className}");
+            var linkage = GetLLVMLinkage(evt.Access);
+
+            // Events in LLVM are implemented as delegate fields with add/remove methods
+            // Generate add_EventName method
+            var delegateType = "i8*";  // Function pointer type
+            WriteLine($"; Event: {evt.Name} (delegate type: {evt.DelegateType ?? "EventHandler"})");
+
+            if (evt.IsStatic)
+            {
+                // Static event - add handler
+                WriteLine($"define {linkage}void @{className}_add_{eventName}({delegateType} %handler) {{");
+                WriteLine("entry:");
+                WriteLine($"  ; TODO: Combine delegate with existing handler");
+                WriteLine("  ret void");
+                WriteLine("}");
+                WriteLine();
+
+                // Static event - remove handler
+                WriteLine($"define {linkage}void @{className}_remove_{eventName}({delegateType} %handler) {{");
+                WriteLine("entry:");
+                WriteLine($"  ; TODO: Remove delegate from handler list");
+                WriteLine("  ret void");
+                WriteLine("}");
+            }
+            else
+            {
+                // Instance event - add handler
+                WriteLine($"define {linkage}void @{className}_add_{eventName}({structType}* %this, {delegateType} %handler) {{");
+                WriteLine("entry:");
+                WriteLine($"  ; TODO: Combine delegate with existing handler");
+                WriteLine("  ret void");
+                WriteLine("}");
+                WriteLine();
+
+                // Instance event - remove handler
+                WriteLine($"define {linkage}void @{className}_remove_{eventName}({structType}* %this, {delegateType} %handler) {{");
+                WriteLine("entry:");
+                WriteLine($"  ; TODO: Remove delegate from handler list");
+                WriteLine("  ret void");
+                WriteLine("}");
             }
         }
 
@@ -530,6 +704,24 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             var structType = _classStructTypes.GetValueOrDefault(irClass.Name, $"%class.{className}");
             var returnType = MapType(method.ReturnType);
 
+            // Handle abstract methods - just declare, no body
+            if (method.IsAbstract)
+            {
+                var abstractParams = new List<string>();
+                if (!method.IsStatic)
+                {
+                    abstractParams.Add($"{structType}*");
+                }
+                foreach (var param in method.Parameters ?? new List<IRVariable>())
+                {
+                    abstractParams.Add(MapType(param.Type));
+                }
+                WriteLine($"; abstract method - declaration only");
+                WriteLine($"declare {returnType} @{className}_{methodName}({string.Join(", ", abstractParams)})");
+                WriteLine();
+                return;
+            }
+
             _currentFunction = method.Implementation;
             _llvmNames.Clear();
             _declaredIdentifiers.Clear();
@@ -551,7 +743,22 @@ namespace BasicLang.Compiler.CodeGen.LLVM
                 }
             }
 
-            WriteLine($"define {returnType} @{className}_{methodName}({string.Join(", ", paramList)}) {{");
+            // Determine linkage based on access modifier
+            var linkage = GetLLVMLinkage(method.Access);
+            var modifiers = new List<string>();
+            if (method.IsVirtual) modifiers.Add("virtual");
+            if (method.IsOverride) modifiers.Add("override");
+            if (method.IsSealed) modifiers.Add("sealed");
+
+            // Add generic parameters info
+            if (method.GenericParameters != null && method.GenericParameters.Count > 0)
+            {
+                modifiers.Add($"generic<{string.Join(", ", method.GenericParameters)}>");
+            }
+
+            var modComment = modifiers.Count > 0 ? $" ; {string.Join(", ", modifiers)}" : "";
+
+            WriteLine($"define {linkage}{returnType} @{className}_{methodName}({string.Join(", ", paramList)}){modComment} {{");
             WriteLine("entry:");
 
             if (method.Implementation != null)
@@ -605,7 +812,8 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             _tempCounter = 0;
 
             var paramList = prop.IsStatic ? "" : $"{structType}* %this";
-            WriteLine($"define {returnType} @{className}_get_{propName}({paramList}) {{");
+            var linkage = GetLLVMLinkage(prop.Access);
+            WriteLine($"define {linkage}{returnType} @{className}_get_{propName}({paramList}) {{");
             WriteLine("entry:");
 
             if (prop.Getter?.EntryBlock != null)
@@ -641,7 +849,8 @@ namespace BasicLang.Compiler.CodeGen.LLVM
                 ? $"{valueType} %value"
                 : $"{structType}* %this, {valueType} %value";
 
-            WriteLine($"define void @{className}_set_{propName}({paramList}) {{");
+            var linkage = GetLLVMLinkage(prop.Access);
+            WriteLine($"define {linkage}void @{className}_set_{propName}({paramList}) {{");
             WriteLine("entry:");
 
             if (prop.Setter?.EntryBlock != null)
@@ -814,7 +1023,18 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             var paramList = string.Join(", ", function.Parameters.Select(p =>
                 $"{MapType(p.Type)} %{SanitizeLLVMName(p.Name)}"));
 
-            WriteLine($"define {returnType} @{funcName}({paramList}) {{");
+            // Check if this is an operator overload
+            var opComment = "";
+            if (function.Name.Contains("op_") || function.Name.Contains(".op_"))
+            {
+                var opName = GetOperatorSymbol(function.Name);
+                if (!string.IsNullOrEmpty(opName))
+                {
+                    opComment = $" ; operator {opName}";
+                }
+            }
+
+            WriteLine($"define {returnType} @{funcName}({paramList}){opComment} {{");
 
             // Entry block
             WriteLine("entry:");
@@ -1832,6 +2052,20 @@ namespace BasicLang.Compiler.CodeGen.LLVM
 
             // Store the value
             WriteLine($"  store {fieldType} {value}, {fieldType}* {gepResult}");
+        }
+
+        public override void Visit(IRTupleElement tupleElement)
+        {
+            // LLVM tuple element access - extract value from tuple struct
+            var tupleVal = GetLLVMName(tupleElement.Tuple);
+            tupleVal = LoadIfNeeded(tupleElement.Tuple, tupleVal);
+            var elemType = MapType(tupleElement.Type);
+            var resultName = SanitizeLLVMName(tupleElement.Name);
+
+            // Use extractvalue for LLVM tuple/struct element access
+            var result = $"%t{_tempCounter++}";
+            WriteLine($"  {result} = extractvalue {{ {elemType} }} {tupleVal}, {tupleElement.Index}");
+            _valueNames[tupleElement] = result;
         }
 
         #endregion

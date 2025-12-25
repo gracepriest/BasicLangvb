@@ -1915,6 +1915,30 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _currentStack -= 2;
         }
 
+        public override void Visit(IRTupleElement tupleElement)
+        {
+            // Load tuple value onto stack
+            EmitLoadValue(tupleElement.Tuple);
+
+            // Call the Item property getter (Item1, Item2, etc.)
+            var tupleType = MapType(tupleElement.Tuple?.Type) ?? "object";
+            var elemType = MapType(tupleElement.Type);
+            var itemIndex = tupleElement.Index + 1; // 1-based
+
+            WriteLine($"    ldfld {elemType} {tupleType}::Item{itemIndex}");
+
+            // Store to local variable
+            var varName = SanitizeName(tupleElement.Name);
+            if (!_localIndices.ContainsKey(varName))
+            {
+                var localIndex = _localCounter++;
+                _localIndices[varName] = localIndex;
+            }
+            WriteLine($"    stloc {_localIndices[varName]}");
+
+            // Stack: push elem, pop tuple = net 0
+        }
+
         #endregion
 
         private void WriteLine(string text = "")

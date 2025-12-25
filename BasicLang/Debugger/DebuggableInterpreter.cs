@@ -238,18 +238,45 @@ namespace BasicLang.Debugger
 
         public object EvaluateExpression(string expression)
         {
-            // Simple variable lookup
+            if (string.IsNullOrWhiteSpace(expression))
+                return null;
+
             lock (_syncLock)
             {
-                if (_callStack.Count > 0)
+                try
                 {
-                    var frame = _callStack.Peek();
-                    if (frame.LocalVariables.TryGetValue(expression, out var value))
-                        return value;
+                    var evaluator = new DebugExpressionEvaluator(this);
+                    return evaluator.Evaluate(expression);
                 }
-                if (_globalVariables.TryGetValue(expression, out var globalValue))
-                    return globalValue;
+                catch
+                {
+                    // Fallback to simple variable lookup
+                    if (_callStack.Count > 0)
+                    {
+                        var frame = _callStack.Peek();
+                        if (frame.LocalVariables.TryGetValue(expression, out var value))
+                            return value;
+                    }
+                    if (_globalVariables.TryGetValue(expression, out var globalValue))
+                        return globalValue;
+                    return null;
+                }
             }
+        }
+
+        /// <summary>
+        /// Get a variable value from current scope
+        /// </summary>
+        internal object GetVariable(string name)
+        {
+            if (_callStack.Count > 0)
+            {
+                var frame = _callStack.Peek();
+                if (frame.LocalVariables.TryGetValue(name, out var value))
+                    return value;
+            }
+            if (_globalVariables.TryGetValue(name, out var globalValue))
+                return globalValue;
             return null;
         }
 
@@ -687,5 +714,361 @@ namespace BasicLang.Debugger
         public int Line { get; set; }
         public string File { get; set; }
         public string Message { get; set; }
+    }
+
+    /// <summary>
+    /// Expression evaluator for debugging - parses and evaluates expressions at breakpoints
+    /// Supports: variables, literals, arithmetic, comparisons, logical operators, property access
+    /// </summary>
+    internal class DebugExpressionEvaluator
+    {
+        private readonly DebuggableInterpreter _interpreter;
+        private string _expression;
+        private int _pos;
+
+        public DebugExpressionEvaluator(DebuggableInterpreter interpreter)
+        {
+            _interpreter = interpreter;
+        }
+
+        public object Evaluate(string expression)
+        {
+            _expression = expression.Trim();
+            _pos = 0;
+            return ParseOrExpression();
+        }
+
+        private char Current => _pos < _expression.Length ? _expression[_pos] : '\0';
+        private char Peek(int offset = 1) => _pos + offset < _expression.Length ? _expression[_pos + offset] : '\0';
+
+        private void SkipWhitespace()
+        {
+            while (_pos < _expression.Length && char.IsWhiteSpace(_expression[_pos]))
+                _pos++;
+        }
+
+        private bool Match(string text)
+        {
+            SkipWhitespace();
+            if (_pos + text.Length <= _expression.Length &&
+                _expression.Substring(_pos, text.Length).Equals(text, StringComparison.OrdinalIgnoreCase))
+            {
+                // Make sure it's not part of a longer identifier
+                if (text.All(char.IsLetter) && _pos + text.Length < _expression.Length &&
+                    char.IsLetterOrDigit(_expression[_pos + text.Length]))
+                    return false;
+
+                _pos += text.Length;
+                return true;
+            }
+            return false;
+        }
+
+        private object ParseOrExpression()
+        {
+            var left = ParseAndExpression();
+
+            while (Match("Or") || Match("OrElse") || Match("||"))
+            {
+                var right = ParseAndExpression();
+                left = Convert.ToBoolean(left) || Convert.ToBoolean(right);
+            }
+
+            return left;
+        }
+
+        private object ParseAndExpression()
+        {
+            var left = ParseNotExpression();
+
+            while (Match("And") || Match("AndAlso") || Match("&&"))
+            {
+                var right = ParseNotExpression();
+                left = Convert.ToBoolean(left) && Convert.ToBoolean(right);
+            }
+
+            return left;
+        }
+
+        private object ParseNotExpression()
+        {
+            SkipWhitespace();
+            if (Match("Not") || Match("!"))
+            {
+                var operand = ParseNotExpression();
+                return !Convert.ToBoolean(operand);
+            }
+            return ParseComparisonExpression();
+        }
+
+        private object ParseComparisonExpression()
+        {
+            var left = ParseAdditiveExpression();
+
+            SkipWhitespace();
+            string op = null;
+
+            if (Match("<=")) op = "<=";
+            else if (Match(">=")) op = ">=";
+            else if (Match("<>")) op = "<>";
+            else if (Match("!=")) op = "<>";
+            else if (Match("==")) op = "=";
+            else if (Match("=")) op = "=";
+            else if (Match("<")) op = "<";
+            else if (Match(">")) op = ">";
+
+            if (op != null)
+            {
+                var right = ParseAdditiveExpression();
+                return Compare(left, right, op);
+            }
+
+            return left;
+        }
+
+        private object ParseAdditiveExpression()
+        {
+            var left = ParseMultiplicativeExpression();
+
+            while (true)
+            {
+                SkipWhitespace();
+                if (Match("+"))
+                {
+                    var right = ParseMultiplicativeExpression();
+                    left = Add(left, right);
+                }
+                else if (Match("-"))
+                {
+                    var right = ParseMultiplicativeExpression();
+                    left = Subtract(left, right);
+                }
+                else if (Match("&"))
+                {
+                    var right = ParseMultiplicativeExpression();
+                    left = Convert.ToString(left) + Convert.ToString(right);
+                }
+                else break;
+            }
+
+            return left;
+        }
+
+        private object ParseMultiplicativeExpression()
+        {
+            var left = ParseUnaryExpression();
+
+            while (true)
+            {
+                SkipWhitespace();
+                if (Match("*"))
+                {
+                    var right = ParseUnaryExpression();
+                    left = Multiply(left, right);
+                }
+                else if (Match("/"))
+                {
+                    var right = ParseUnaryExpression();
+                    left = Divide(left, right);
+                }
+                else if (Match("\\") || Match("Mod"))
+                {
+                    var right = ParseUnaryExpression();
+                    left = Convert.ToInt64(left) % Convert.ToInt64(right);
+                }
+                else break;
+            }
+
+            return left;
+        }
+
+        private object ParseUnaryExpression()
+        {
+            SkipWhitespace();
+            if (Match("-"))
+            {
+                var operand = ParseUnaryExpression();
+                return Negate(operand);
+            }
+            return ParsePrimaryExpression();
+        }
+
+        private object ParsePrimaryExpression()
+        {
+            SkipWhitespace();
+
+            // Parentheses
+            if (Match("("))
+            {
+                var result = ParseOrExpression();
+                Match(")");
+                return result;
+            }
+
+            // String literal
+            if (Current == '"')
+            {
+                _pos++;
+                var start = _pos;
+                while (_pos < _expression.Length && _expression[_pos] != '"')
+                    _pos++;
+                var str = _expression.Substring(start, _pos - start);
+                if (Current == '"') _pos++;
+                return str;
+            }
+
+            // Number literal
+            if (char.IsDigit(Current) || (Current == '.' && char.IsDigit(Peek())))
+            {
+                var start = _pos;
+                while (char.IsDigit(Current)) _pos++;
+                if (Current == '.')
+                {
+                    _pos++;
+                    while (char.IsDigit(Current)) _pos++;
+                    return double.Parse(_expression.Substring(start, _pos - start));
+                }
+                return long.Parse(_expression.Substring(start, _pos - start));
+            }
+
+            // Boolean literals
+            if (Match("True")) return true;
+            if (Match("False")) return false;
+            if (Match("Nothing") || Match("null")) return null;
+
+            // Identifier (variable or property chain)
+            if (char.IsLetter(Current) || Current == '_')
+            {
+                var start = _pos;
+                while (char.IsLetterOrDigit(Current) || Current == '_') _pos++;
+                var name = _expression.Substring(start, _pos - start);
+
+                var value = _interpreter.GetVariable(name);
+
+                // Handle property/method access chain
+                while (true)
+                {
+                    SkipWhitespace();
+                    if (Match("."))
+                    {
+                        value = AccessMember(value);
+                    }
+                    else if (Current == '(')
+                    {
+                        // Array/indexer access
+                        _pos++;
+                        var index = ParseOrExpression();
+                        Match(")");
+                        value = AccessIndex(value, index);
+                    }
+                    else break;
+                }
+
+                return value;
+            }
+
+            return null;
+        }
+
+        private object AccessMember(object obj)
+        {
+            if (obj == null) return null;
+
+            SkipWhitespace();
+            var start = _pos;
+            while (char.IsLetterOrDigit(Current) || Current == '_') _pos++;
+            var memberName = _expression.Substring(start, _pos - start);
+
+            var type = obj.GetType();
+
+            // Try property
+            var prop = type.GetProperty(memberName, System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+            if (prop != null)
+                return prop.GetValue(obj);
+
+            // Try field
+            var field = type.GetField(memberName, System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+            if (field != null)
+                return field.GetValue(obj);
+
+            return null;
+        }
+
+        private object AccessIndex(object obj, object index)
+        {
+            if (obj == null) return null;
+
+            if (obj is Array arr)
+                return arr.GetValue(Convert.ToInt32(index));
+
+            if (obj is System.Collections.IList list)
+                return list[Convert.ToInt32(index)];
+
+            if (obj is System.Collections.IDictionary dict)
+                return dict[index];
+
+            // Try indexer property
+            var type = obj.GetType();
+            var indexer = type.GetProperty("Item");
+            if (indexer != null)
+                return indexer.GetValue(obj, new[] { index });
+
+            return null;
+        }
+
+        private bool Compare(object left, object right, string op)
+        {
+            if (left == null && right == null) return op == "=" || op == "<=>" ? false : op == "<>";
+            if (left == null || right == null) return op == "<>";
+
+            if (left is string || right is string)
+            {
+                int cmp = string.Compare(Convert.ToString(left), Convert.ToString(right), StringComparison.OrdinalIgnoreCase);
+                return op switch
+                {
+                    "=" => cmp == 0,
+                    "<>" => cmp != 0,
+                    "<" => cmp < 0,
+                    ">" => cmp > 0,
+                    "<=" => cmp <= 0,
+                    ">=" => cmp >= 0,
+                    _ => false
+                };
+            }
+
+            double l = Convert.ToDouble(left);
+            double r = Convert.ToDouble(right);
+            return op switch
+            {
+                "=" => l == r,
+                "<>" => l != r,
+                "<" => l < r,
+                ">" => l > r,
+                "<=" => l <= r,
+                ">=" => l >= r,
+                _ => false
+            };
+        }
+
+        private object Add(object left, object right)
+        {
+            if (left is string || right is string)
+                return Convert.ToString(left) + Convert.ToString(right);
+            return Convert.ToDouble(left) + Convert.ToDouble(right);
+        }
+
+        private object Subtract(object left, object right)
+            => Convert.ToDouble(left) - Convert.ToDouble(right);
+
+        private object Multiply(object left, object right)
+            => Convert.ToDouble(left) * Convert.ToDouble(right);
+
+        private object Divide(object left, object right)
+            => Convert.ToDouble(left) / Convert.ToDouble(right);
+
+        private object Negate(object value)
+            => -Convert.ToDouble(value);
     }
 }

@@ -17,6 +17,7 @@ namespace BasicLang.Compiler.LSP
     public class LinkedEditingRangeHandler : LinkedEditingRangeHandlerBase
     {
         private readonly DocumentManager _documentManager;
+        private DocumentState _currentState;
 
         public LinkedEditingRangeHandler(DocumentManager documentManager)
         {
@@ -40,6 +41,7 @@ namespace BasicLang.Compiler.LSP
             {
                 return Task.FromResult<LinkedEditingRanges>(null);
             }
+            _currentState = state;
 
             // Get the word at the cursor position
             var word = state.GetWordAtPosition((int)request.Position.Line, (int)request.Position.Character);
@@ -279,10 +281,69 @@ namespace BasicLang.Compiler.LSP
 
         private int FindEndLine(int startLine, string endKeyword)
         {
-            // This is a simplified version - in a real implementation,
-            // we would use the DocumentState to find the actual end line
-            // For now, return a reasonable default
-            return startLine + 100; // Assume max 100 lines per function/sub/class
+            if (_currentState?.Tokens == null)
+                return startLine + 100;
+
+            // Map end keyword to token types
+            TokenType? startType = null;
+            TokenType? endType = null;
+
+            switch (endKeyword.ToLower().Replace(" ", ""))
+            {
+                case "endfunction":
+                    startType = TokenType.Function;
+                    endType = TokenType.EndFunction;
+                    break;
+                case "endsub":
+                    startType = TokenType.Sub;
+                    endType = TokenType.EndSub;
+                    break;
+                case "endclass":
+                    startType = TokenType.Class;
+                    endType = TokenType.EndClass;
+                    break;
+                case "endif":
+                    startType = TokenType.If;
+                    endType = TokenType.EndIf;
+                    break;
+                case "endselect":
+                    startType = TokenType.Select;
+                    endType = TokenType.EndSelect;
+                    break;
+            }
+
+            if (!startType.HasValue || !endType.HasValue)
+                return startLine + 100;
+
+            // Track nesting level for proper matching
+            int nestingLevel = 1;
+
+            foreach (var token in _currentState.Tokens)
+            {
+                int tokenLine = token.Line - 1; // Convert to 0-based
+
+                if (tokenLine <= startLine)
+                    continue;
+
+                // Check for nested start keywords
+                if (token.Type == startType.Value)
+                {
+                    nestingLevel++;
+                }
+
+                // Check for end keyword
+                if (token.Type == endType.Value)
+                {
+                    nestingLevel--;
+                    if (nestingLevel == 0)
+                    {
+                        return tokenLine;
+                    }
+                }
+            }
+
+            // Fallback to document end if not found
+            return _currentState.Lines?.Length > 0 ? _currentState.Lines.Length - 1 : startLine + 100;
         }
 
         private class ScopeInfo

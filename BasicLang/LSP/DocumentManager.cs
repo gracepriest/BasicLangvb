@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Security.Cryptography;
+using System.Text;
 using BasicLang.Compiler;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler.SemanticAnalysis;
@@ -9,26 +11,120 @@ using OmniSharp.Extensions.LanguageServer.Protocol;
 namespace BasicLang.Compiler.LSP
 {
     /// <summary>
-    /// Manages open documents and their parsed state
+    /// Manages open documents and their parsed state with caching support
     /// </summary>
     public class DocumentManager
     {
         private readonly ConcurrentDictionary<DocumentUri, DocumentState> _documents;
+        private readonly ConcurrentDictionary<string, CachedParseResult> _parseCache;
+        private readonly int _maxCacheEntries;
+        private readonly object _cacheLock = new object();
 
-        public DocumentManager()
+        public DocumentManager(int maxCacheEntries = 100)
         {
             _documents = new ConcurrentDictionary<DocumentUri, DocumentState>();
+            _parseCache = new ConcurrentDictionary<string, CachedParseResult>();
+            _maxCacheEntries = maxCacheEntries;
         }
 
         /// <summary>
-        /// Open or update a document
+        /// Open or update a document with caching support
         /// </summary>
         public DocumentState UpdateDocument(DocumentUri uri, string content)
         {
+            // Check if document exists and content hasn't changed
+            if (_documents.TryGetValue(uri, out var existingState))
+            {
+                if (existingState.ContentHash == ComputeHash(content))
+                {
+                    // Content unchanged, return cached state
+                    return existingState;
+                }
+            }
+
+            // Create new state and try to use cached parse results
             var state = new DocumentState(uri, content);
-            state.Parse();
+            var contentHash = state.ContentHash;
+
+            // Check parse cache
+            if (_parseCache.TryGetValue(contentHash, out var cachedResult))
+            {
+                // Use cached parse result
+                state.ApplyCachedResult(cachedResult);
+            }
+            else
+            {
+                // Parse and cache the result
+                state.Parse();
+
+                // Cache the result if parsing was successful
+                if (state.ParseSuccessful)
+                {
+                    CacheParseResult(contentHash, state);
+                }
+            }
+
             _documents[uri] = state;
             return state;
+        }
+
+        private void CacheParseResult(string contentHash, DocumentState state)
+        {
+            lock (_cacheLock)
+            {
+                // Evict old entries if cache is full
+                if (_parseCache.Count >= _maxCacheEntries)
+                {
+                    // Remove oldest entries (simple FIFO eviction)
+                    var keysToRemove = new List<string>();
+                    int removeCount = _parseCache.Count / 4; // Remove 25%
+                    int count = 0;
+                    foreach (var key in _parseCache.Keys)
+                    {
+                        if (count++ < removeCount)
+                            keysToRemove.Add(key);
+                        else
+                            break;
+                    }
+                    foreach (var key in keysToRemove)
+                    {
+                        _parseCache.TryRemove(key, out _);
+                    }
+                }
+
+                _parseCache[contentHash] = new CachedParseResult
+                {
+                    Tokens = state.Tokens,
+                    AST = state.AST,
+                    CachedAt = DateTime.UtcNow
+                };
+            }
+        }
+
+        private static string ComputeHash(string content)
+        {
+            using (var sha256 = SHA256.Create())
+            {
+                var bytes = Encoding.UTF8.GetBytes(content);
+                var hashBytes = sha256.ComputeHash(bytes);
+                return Convert.ToBase64String(hashBytes);
+            }
+        }
+
+        /// <summary>
+        /// Clear the parse cache
+        /// </summary>
+        public void ClearCache()
+        {
+            _parseCache.Clear();
+        }
+
+        /// <summary>
+        /// Get cache statistics
+        /// </summary>
+        public (int documentCount, int cacheEntries) GetCacheStats()
+        {
+            return (_documents.Count, _parseCache.Count);
         }
 
         /// <summary>
@@ -58,12 +154,23 @@ namespace BasicLang.Compiler.LSP
     }
 
     /// <summary>
+    /// Cached parse result for reuse
+    /// </summary>
+    public class CachedParseResult
+    {
+        public List<Token> Tokens { get; set; }
+        public ProgramNode AST { get; set; }
+        public DateTime CachedAt { get; set; }
+    }
+
+    /// <summary>
     /// Represents the state of a single document
     /// </summary>
     public class DocumentState
     {
         public DocumentUri Uri { get; }
         public string Content { get; private set; }
+        public string ContentHash { get; private set; }
         public string[] Lines { get; private set; }
         public List<Token> Tokens { get; private set; }
         public ProgramNode AST { get; private set; }
@@ -71,14 +178,42 @@ namespace BasicLang.Compiler.LSP
         public List<Diagnostic> Diagnostics { get; private set; }
         public bool ParseSuccessful { get; private set; }
         public bool SemanticSuccessful { get; private set; }
+        public bool FromCache { get; private set; }
+        public DateTime ParsedAt { get; private set; }
 
         public DocumentState(DocumentUri uri, string content)
         {
             Uri = uri;
             Content = content;
+            ContentHash = ComputeContentHash(content);
             Lines = content.Split('\n');
             Tokens = new List<Token>();
             Diagnostics = new List<Diagnostic>();
+            ParsedAt = DateTime.UtcNow;
+        }
+
+        private static string ComputeContentHash(string content)
+        {
+            using (var sha256 = System.Security.Cryptography.SHA256.Create())
+            {
+                var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+                var hashBytes = sha256.ComputeHash(bytes);
+                return Convert.ToBase64String(hashBytes);
+            }
+        }
+
+        /// <summary>
+        /// Apply a cached parse result (avoids re-lexing and re-parsing)
+        /// </summary>
+        public void ApplyCachedResult(CachedParseResult cached)
+        {
+            Tokens = cached.Tokens;
+            AST = cached.AST;
+            ParseSuccessful = true;
+            FromCache = true;
+
+            // Still need to run semantic analysis as it may depend on other documents
+            RunSemanticAnalysis();
         }
 
         /// <summary>
@@ -89,6 +224,8 @@ namespace BasicLang.Compiler.LSP
             Diagnostics.Clear();
             ParseSuccessful = false;
             SemanticSuccessful = false;
+            FromCache = false;
+            ParsedAt = DateTime.UtcNow;
 
             try
             {
@@ -102,6 +239,39 @@ namespace BasicLang.Compiler.LSP
                 ParseSuccessful = true;
 
                 // Semantic analysis
+                RunSemanticAnalysis();
+            }
+            catch (ParseException ex)
+            {
+                Diagnostics.Add(new Diagnostic
+                {
+                    Message = ex.Message,
+                    Severity = DiagnosticSeverity.Error,
+                    Line = ex.Token?.Line ?? 1,
+                    Column = ex.Token?.Column ?? 1
+                });
+            }
+            catch (Exception ex)
+            {
+                Diagnostics.Add(new Diagnostic
+                {
+                    Message = $"Internal error: {ex.Message}",
+                    Severity = DiagnosticSeverity.Error,
+                    Line = 1,
+                    Column = 1
+                });
+            }
+        }
+
+        /// <summary>
+        /// Run semantic analysis on the parsed AST
+        /// </summary>
+        private void RunSemanticAnalysis()
+        {
+            if (AST == null) return;
+
+            try
+            {
                 SemanticAnalyzer = new SemanticAnalyzer();
                 SemanticSuccessful = SemanticAnalyzer.Analyze(AST);
 
@@ -119,21 +289,11 @@ namespace BasicLang.Compiler.LSP
                     });
                 }
             }
-            catch (ParseException ex)
-            {
-                Diagnostics.Add(new Diagnostic
-                {
-                    Message = ex.Message,
-                    Severity = DiagnosticSeverity.Error,
-                    Line = ex.Token?.Line ?? 1,
-                    Column = ex.Token?.Column ?? 1
-                });
-            }
             catch (Exception ex)
             {
                 Diagnostics.Add(new Diagnostic
                 {
-                    Message = $"Internal error: {ex.Message}",
+                    Message = $"Semantic analysis error: {ex.Message}",
                     Severity = DiagnosticSeverity.Error,
                     Line = 1,
                     Column = 1

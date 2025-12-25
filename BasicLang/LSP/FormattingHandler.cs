@@ -281,12 +281,10 @@ namespace BasicLang.Compiler.LSP
     public class RangeFormattingHandler : DocumentRangeFormattingHandlerBase
     {
         private readonly DocumentManager _documentManager;
-        private readonly FormattingHandler _formattingHandler;
 
         public RangeFormattingHandler(DocumentManager documentManager)
         {
             _documentManager = documentManager;
-            _formattingHandler = new FormattingHandler(documentManager);
         }
 
         public override Task<TextEditContainer> Handle(DocumentRangeFormattingParams request, CancellationToken cancellationToken)
@@ -297,15 +295,174 @@ namespace BasicLang.Compiler.LSP
                 return Task.FromResult(new TextEditContainer());
             }
 
-            // For simplicity, format the entire document
-            // A more sophisticated implementation would only format the selected range
-            return _formattingHandler.Handle(
-                new DocumentFormattingParams
+            var startLine = (int)request.Range.Start.Line;
+            var endLine = (int)request.Range.End.Line;
+
+            // Ensure valid range
+            if (startLine < 0 || startLine >= state.Lines.Length || endLine < startLine)
+            {
+                return Task.FromResult(new TextEditContainer());
+            }
+
+            endLine = System.Math.Min(endLine, state.Lines.Length - 1);
+
+            // Calculate initial indent level by analyzing lines before selection
+            int baseIndentLevel = CalculateIndentLevel(state.Lines, startLine, request.Options);
+
+            // Format only the selected range
+            var edits = new List<TextEdit>();
+            var indentString = request.Options.InsertSpaces
+                ? new string(' ', (int)request.Options.TabSize)
+                : "\t";
+
+            int currentIndent = baseIndentLevel;
+
+            for (int i = startLine; i <= endLine; i++)
+            {
+                var line = state.Lines[i].TrimEnd('\r');
+                var trimmed = line.Trim();
+
+                if (string.IsNullOrWhiteSpace(trimmed))
                 {
-                    TextDocument = request.TextDocument,
-                    Options = request.Options
-                },
-                cancellationToken);
+                    continue; // Skip empty lines
+                }
+
+                // Check indent adjustments
+                if (IsDecreaseIndentBefore(trimmed))
+                {
+                    currentIndent = System.Math.Max(0, currentIndent - 1);
+                }
+
+                string formattedLine;
+                if (IsMiddleKeyword(trimmed))
+                {
+                    var tempIndent = System.Math.Max(0, currentIndent - 1);
+                    formattedLine = GetIndent(tempIndent, indentString) + FormatLine(trimmed);
+                }
+                else
+                {
+                    formattedLine = GetIndent(currentIndent, indentString) + FormatLine(trimmed);
+                }
+
+                // Only add edit if line changed
+                if (line != formattedLine)
+                {
+                    edits.Add(new TextEdit
+                    {
+                        Range = new LspRange(new Position(i, 0), new Position(i, line.Length)),
+                        NewText = formattedLine
+                    });
+                }
+
+                if (IsIncreaseIndentAfter(trimmed))
+                {
+                    currentIndent++;
+                }
+            }
+
+            return Task.FromResult(new TextEditContainer(edits));
+        }
+
+        private int CalculateIndentLevel(string[] lines, int targetLine, FormattingOptions options)
+        {
+            int indent = 0;
+
+            for (int i = 0; i < targetLine && i < lines.Length; i++)
+            {
+                var trimmed = lines[i].Trim();
+                if (string.IsNullOrWhiteSpace(trimmed)) continue;
+
+                if (IsDecreaseIndentBefore(trimmed))
+                {
+                    indent = System.Math.Max(0, indent - 1);
+                }
+
+                if (IsIncreaseIndentAfter(trimmed))
+                {
+                    indent++;
+                }
+            }
+
+            return indent;
+        }
+
+        private string FormatLine(string line)
+        {
+            var result = line;
+            result = System.Text.RegularExpressions.Regex.Replace(result, @",(?!\s)", ", ");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"(?<![<>=!])=(?!=)", " = ");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+=\s+", " = ");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"<>", " <> ");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"<=", " <= ");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @">=", " >= ");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s{2,}", " ");
+            return result.Trim();
+        }
+
+        private bool IsIncreaseIndentAfter(string line)
+        {
+            var upper = line.ToUpperInvariant();
+            if (upper.StartsWith("IF ") && upper.EndsWith(" THEN")) return true;
+            if (upper.StartsWith("ELSEIF ") && upper.EndsWith(" THEN")) return true;
+            if (upper == "ELSE") return true;
+            if (upper.StartsWith("FOR ")) return true;
+            if (upper.StartsWith("WHILE ")) return true;
+            if (upper.StartsWith("DO WHILE ") || upper.StartsWith("DO UNTIL ") || upper == "DO") return true;
+            if (upper.StartsWith("SELECT CASE ")) return true;
+            if (upper.StartsWith("CASE ") || upper == "CASE ELSE") return true;
+            if (upper.StartsWith("SUB ")) return true;
+            if (upper.StartsWith("FUNCTION ")) return true;
+            if (upper.StartsWith("CLASS ")) return true;
+            if (upper.StartsWith("PROPERTY ")) return true;
+            if (upper == "GET" || upper.StartsWith("GET(")) return true;
+            if (upper == "SET" || upper.StartsWith("SET(")) return true;
+            if (upper.StartsWith("TRY")) return true;
+            if (upper.StartsWith("CATCH")) return true;
+            if (upper.StartsWith("FINALLY")) return true;
+            if (upper.StartsWith("WITH ")) return true;
+            if (upper.StartsWith("USING ")) return true;
+            return false;
+        }
+
+        private bool IsDecreaseIndentBefore(string line)
+        {
+            var upper = line.ToUpperInvariant();
+            if (upper.StartsWith("END IF") || upper == "ENDIF") return true;
+            if (upper == "NEXT" || upper.StartsWith("NEXT ")) return true;
+            if (upper == "WEND" || upper.StartsWith("END WHILE")) return true;
+            if (upper == "LOOP" || upper.StartsWith("LOOP WHILE") || upper.StartsWith("LOOP UNTIL")) return true;
+            if (upper.StartsWith("END SELECT")) return true;
+            if (upper.StartsWith("END SUB")) return true;
+            if (upper.StartsWith("END FUNCTION")) return true;
+            if (upper.StartsWith("END CLASS")) return true;
+            if (upper.StartsWith("END PROPERTY")) return true;
+            if (upper.StartsWith("END GET")) return true;
+            if (upper.StartsWith("END SET")) return true;
+            if (upper.StartsWith("END TRY")) return true;
+            if (upper.StartsWith("END WITH")) return true;
+            if (upper.StartsWith("END USING")) return true;
+            return false;
+        }
+
+        private bool IsMiddleKeyword(string line)
+        {
+            var upper = line.ToUpperInvariant();
+            if (upper == "ELSE") return true;
+            if (upper.StartsWith("ELSEIF ")) return true;
+            if (upper.StartsWith("CASE ") || upper == "CASE ELSE") return true;
+            if (upper.StartsWith("CATCH")) return true;
+            if (upper.StartsWith("FINALLY")) return true;
+            return false;
+        }
+
+        private string GetIndent(int level, string indentString)
+        {
+            var sb = new StringBuilder();
+            for (int i = 0; i < level; i++)
+            {
+                sb.Append(indentString);
+            }
+            return sb.ToString();
         }
 
         protected override DocumentRangeFormattingRegistrationOptions CreateRegistrationOptions(

@@ -207,7 +207,7 @@ End Sub";
         {
             var source = @"
 Sub Test(x As Integer)
-    Select x
+    Select Case x
         Case 1
             Print(""one"")
         Case 2

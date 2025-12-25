@@ -968,6 +968,9 @@ namespace BasicLang.Compiler.IR.Optimization
             AddPass(new FunctionInliningPass());
             AddPass(new TailCallOptimizationPass());
             AddPass(new AlgebraicSimplificationPass());
+            AddPass(new LoopFusionPass());  // Fuse adjacent loops before unrolling
+            AddPass(new LoopUnrollingPass(4));  // 4x unrolling
+            AddPass(new InductionVariablePass());
         }
         
         public OptimizationResult Run(IRModule module)
@@ -1765,6 +1768,742 @@ namespace BasicLang.Compiler.IR.Optimization
             }
 
             return binOp;
+        }
+    }
+
+    /// <summary>
+    /// Loop unrolling - unroll small loops to reduce loop overhead
+    /// </summary>
+    public class LoopUnrollingPass : OptimizationPass
+    {
+        private readonly int _unrollFactor;
+        private readonly int _maxBodySize;
+
+        public LoopUnrollingPass(int unrollFactor = 4, int maxBodySize = 20)
+            : base("Loop Unrolling")
+        {
+            _unrollFactor = unrollFactor;
+            _maxBodySize = maxBodySize;
+        }
+
+        public override bool Run(IRModule module)
+        {
+            ModificationCount = 0;
+
+            foreach (var function in module.Functions)
+            {
+                if (function.IsExternal) continue;
+
+                var cfg = new ControlFlowGraph(function);
+                cfg.Build();
+                cfg.ComputeDominators();
+                cfg.IdentifyLoops();
+
+                foreach (var loop in cfg.NaturalLoops.ToList())
+                {
+                    if (CanUnroll(loop, function))
+                    {
+                        UnrollLoop(loop, function);
+                    }
+                }
+            }
+
+            return ModificationCount > 0;
+        }
+
+        private bool CanUnroll(List<BasicBlock> loop, IRFunction function)
+        {
+            if (loop.Count == 0) return false;
+
+            // Find the loop header and get loop info
+            var header = loop.FirstOrDefault(b => b.Name.Contains(".cond") || b.Name.Contains("for.cond") || b.Name.Contains("while.cond"));
+            if (header == null) return false;
+
+            // Check loop body size
+            int totalInstructions = loop.Sum(b => b.Instructions.Count);
+            if (totalInstructions > _maxBodySize) return false;
+
+            // Don't unroll loops with function calls (side effects)
+            foreach (var block in loop)
+            {
+                foreach (var inst in block.Instructions)
+                {
+                    if (inst is IRCall) return false;
+                }
+            }
+
+            // Check for constant trip count
+            var tripCount = GetConstantTripCount(loop, header);
+            if (tripCount == null || tripCount < _unrollFactor) return false;
+
+            // Don't unroll loops with complex control flow (multiple exits)
+            int exitCount = 0;
+            foreach (var block in loop)
+            {
+                foreach (var succ in block.Successors)
+                {
+                    if (!loop.Contains(succ)) exitCount++;
+                }
+            }
+            if (exitCount > 1) return false;
+
+            return true;
+        }
+
+        private int? GetConstantTripCount(List<BasicBlock> loop, BasicBlock header)
+        {
+            // Look for pattern: compare loop variable against constant
+            foreach (var inst in header.Instructions)
+            {
+                if (inst is IRCompare compare)
+                {
+                    // Check if one operand is a constant
+                    if (compare.Right is IRConstant endConst && endConst.Value is int endValue)
+                    {
+                        // Try to find the initial value from before the loop
+                        var initValue = FindInitialValue(loop, compare.Left);
+                        if (initValue.HasValue)
+                        {
+                            // Calculate trip count based on comparison type
+                            return compare.Comparison switch
+                            {
+                                CompareKind.Le => endValue - initValue.Value + 1,
+                                CompareKind.Lt => endValue - initValue.Value,
+                                CompareKind.Ge => initValue.Value - endValue + 1,
+                                CompareKind.Gt => initValue.Value - endValue,
+                                _ => null
+                            };
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        private int? FindInitialValue(List<BasicBlock> loop, IRValue loopVar)
+        {
+            if (loopVar is IRVariable variable)
+            {
+                // Look in predecessor blocks (before loop)
+                var header = loop.FirstOrDefault(b => b.Predecessors.Any(p => !loop.Contains(p)));
+                if (header != null)
+                {
+                    foreach (var pred in header.Predecessors)
+                    {
+                        if (loop.Contains(pred)) continue;
+
+                        // Search backwards for assignment to loop variable
+                        for (int i = pred.Instructions.Count - 1; i >= 0; i--)
+                        {
+                            if (pred.Instructions[i] is IRAssignment assign &&
+                                assign.Target is IRVariable target &&
+                                target.Name == variable.Name &&
+                                assign.Value is IRConstant initConst &&
+                                initConst.Value is int initValue)
+                            {
+                                return initValue;
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        private void UnrollLoop(List<BasicBlock> loop, IRFunction function)
+        {
+            // Find loop structure
+            var header = loop.FirstOrDefault(b => b.Name.Contains(".cond"));
+            var body = loop.FirstOrDefault(b => b.Name.Contains(".body"));
+            var increment = loop.FirstOrDefault(b => b.Name.Contains(".inc"));
+
+            if (header == null || body == null) return;
+
+            // Get the loop variable name
+            string loopVarName = null;
+            foreach (var inst in header.Instructions)
+            {
+                if (inst is IRCompare cmp && cmp.Left is IRVariable v)
+                {
+                    loopVarName = v.Name;
+                    break;
+                }
+            }
+            if (loopVarName == null) return;
+
+            // Get increment amount (default to 1)
+            int incrementAmount = 1;
+            if (increment != null)
+            {
+                foreach (var inst in increment.Instructions)
+                {
+                    if (inst is IRBinaryOp binOp &&
+                        binOp.Operation == BinaryOpKind.Add &&
+                        binOp.Right is IRConstant incConst &&
+                        incConst.Value is int incVal)
+                    {
+                        incrementAmount = incVal;
+                        break;
+                    }
+                }
+            }
+
+            // Clone body instructions for unrolling
+            var originalBodyInstructions = new List<IRInstruction>(body.Instructions);
+
+            // Remove the branch at end of body if present
+            if (originalBodyInstructions.Count > 0 &&
+                originalBodyInstructions[originalBodyInstructions.Count - 1] is IRBranch)
+            {
+                originalBodyInstructions.RemoveAt(originalBodyInstructions.Count - 1);
+            }
+
+            // Create unrolled body instructions
+            var unrolledInstructions = new List<IRInstruction>();
+            int tempCounter = 0;
+
+            for (int unroll = 0; unroll < _unrollFactor; unroll++)
+            {
+                foreach (var inst in originalBodyInstructions)
+                {
+                    var cloned = CloneInstruction(inst, $"_u{unroll}_", ref tempCounter);
+                    if (cloned != null)
+                    {
+                        unrolledInstructions.Add(cloned);
+                    }
+                }
+
+                // Add increment for this iteration (except last which goes through normal increment)
+                if (unroll < _unrollFactor - 1 && increment != null)
+                {
+                    foreach (var inst in increment.Instructions)
+                    {
+                        if (inst is IRBranch) continue;
+                        var cloned = CloneInstruction(inst, $"_u{unroll}_", ref tempCounter);
+                        if (cloned != null)
+                        {
+                            unrolledInstructions.Add(cloned);
+                        }
+                    }
+                }
+            }
+
+            // Replace body instructions
+            body.Instructions.Clear();
+            body.Instructions.AddRange(unrolledInstructions);
+
+            // Add back the branch to increment
+            if (increment != null)
+            {
+                body.Instructions.Add(new IRBranch(increment));
+            }
+            else
+            {
+                body.Instructions.Add(new IRBranch(header));
+            }
+
+            // Update loop increment to multiply by unroll factor
+            if (increment != null)
+            {
+                for (int i = 0; i < increment.Instructions.Count; i++)
+                {
+                    var inst = increment.Instructions[i];
+                    if (inst is IRBinaryOp binOp &&
+                        binOp.Operation == BinaryOpKind.Add &&
+                        binOp.Left is IRVariable leftVar &&
+                        leftVar.Name == loopVarName)
+                    {
+                        // Change increment to: i = i + (incrementAmount * unrollFactor)
+                        var newIncrement = new IRConstant(incrementAmount * _unrollFactor, binOp.Right.Type);
+                        increment.Instructions[i] = new IRBinaryOp(
+                            binOp.Name,
+                            BinaryOpKind.Add,
+                            binOp.Left,
+                            newIncrement,
+                            binOp.Type);
+                        break;
+                    }
+                }
+            }
+
+            ReportModification();
+        }
+
+        private IRInstruction CloneInstruction(IRInstruction inst, string prefix, ref int tempCounter)
+        {
+            switch (inst)
+            {
+                case IRAssignment assign:
+                    return new IRAssignment(
+                        CloneVariable(assign.Target, prefix),
+                        CloneValue(assign.Value, prefix));
+
+                case IRBinaryOp binOp:
+                    return new IRBinaryOp(
+                        $"{prefix}t{tempCounter++}",
+                        binOp.Operation,
+                        CloneValue(binOp.Left, prefix),
+                        CloneValue(binOp.Right, prefix),
+                        binOp.Type);
+
+                case IRUnaryOp unOp:
+                    return new IRUnaryOp(
+                        $"{prefix}t{tempCounter++}",
+                        unOp.Operation,
+                        CloneValue(unOp.Operand, prefix),
+                        unOp.Type);
+
+                case IRStore store:
+                    return new IRStore(
+                        CloneValue(store.Address, prefix),
+                        CloneValue(store.Value, prefix));
+
+                case IRLoad load:
+                    return new IRLoad(
+                        $"{prefix}t{tempCounter++}",
+                        CloneValue(load.Address, prefix),
+                        load.Type);
+
+                default:
+                    return inst;
+            }
+        }
+
+        private IRVariable CloneVariable(IRVariable variable, string prefix)
+        {
+            if (variable == null) return null;
+            // Don't rename loop variables or globals
+            if (variable.IsGlobal || variable.IsParameter)
+                return variable;
+            return new IRVariable($"{prefix}{variable.Name}", variable.Type);
+        }
+
+        private IRValue CloneValue(IRValue value, string prefix)
+        {
+            if (value is IRVariable variable)
+            {
+                // Don't rename globals or parameters
+                if (variable.IsGlobal || variable.IsParameter)
+                    return variable;
+                return new IRVariable($"{prefix}{variable.Name}", variable.Type);
+            }
+            return value;
+        }
+    }
+
+    /// <summary>
+    /// Induction variable strength reduction - optimize loop-dependent calculations
+    /// </summary>
+    public class InductionVariablePass : OptimizationPass
+    {
+        public InductionVariablePass() : base("Induction Variable Optimization") { }
+
+        public override bool Run(IRModule module)
+        {
+            ModificationCount = 0;
+
+            foreach (var function in module.Functions)
+            {
+                if (function.IsExternal) continue;
+
+                var cfg = new ControlFlowGraph(function);
+                cfg.Build();
+                cfg.ComputeDominators();
+                cfg.IdentifyLoops();
+
+                foreach (var loop in cfg.NaturalLoops)
+                {
+                    OptimizeInductionVariables(loop, function);
+                }
+            }
+
+            return ModificationCount > 0;
+        }
+
+        private void OptimizeInductionVariables(List<BasicBlock> loop, IRFunction function)
+        {
+            // Find basic induction variables (variables that are incremented by constant each iteration)
+            var basicIVs = FindBasicInductionVariables(loop);
+
+            // Find derived induction variables (linear functions of basic IVs)
+            foreach (var block in loop)
+            {
+                for (int i = 0; i < block.Instructions.Count; i++)
+                {
+                    var inst = block.Instructions[i];
+
+                    // Pattern: x = i * c (where i is basic IV, c is constant)
+                    if (inst is IRBinaryOp binOp && binOp.Operation == BinaryOpKind.Mul)
+                    {
+                        IRVariable ivVar = null;
+                        IRConstant constant = null;
+
+                        if (binOp.Left is IRVariable leftVar && basicIVs.ContainsKey(leftVar.Name) &&
+                            binOp.Right is IRConstant rightConst)
+                        {
+                            ivVar = leftVar;
+                            constant = rightConst;
+                        }
+                        else if (binOp.Right is IRVariable rightVar && basicIVs.ContainsKey(rightVar.Name) &&
+                                 binOp.Left is IRConstant leftConst)
+                        {
+                            ivVar = rightVar;
+                            constant = leftConst;
+                        }
+
+                        if (ivVar != null && constant != null && constant.Value is int constVal)
+                        {
+                            // Replace multiplication with addition
+                            // Create a derived IV that's updated each iteration
+                            var derivedIV = new IRVariable($"_div_{binOp.Name}", binOp.Type);
+                            var (increment, _) = basicIVs[ivVar.Name];
+                            int derivedIncrement = increment * constVal;
+
+                            // Find increment block and add update for derived IV
+                            var incBlock = loop.FirstOrDefault(b => b.Name.Contains(".inc"));
+                            if (incBlock != null)
+                            {
+                                // Add: derivedIV = derivedIV + derivedIncrement
+                                var updateInst = new IRBinaryOp(
+                                    derivedIV.Name,
+                                    BinaryOpKind.Add,
+                                    derivedIV,
+                                    new IRConstant(derivedIncrement, constant.Type),
+                                    binOp.Type);
+
+                                // Insert before the branch
+                                int insertPos = incBlock.Instructions.Count;
+                                if (insertPos > 0 && incBlock.Instructions[insertPos - 1] is IRBranch)
+                                    insertPos--;
+                                incBlock.Instructions.Insert(insertPos, updateInst);
+
+                                // Replace original multiplication with derived IV
+                                block.Instructions[i] = new IRAssignment(
+                                    new IRVariable(binOp.Name, binOp.Type),
+                                    derivedIV);
+
+                                ReportModification();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private Dictionary<string, (int increment, BasicBlock incBlock)> FindBasicInductionVariables(List<BasicBlock> loop)
+        {
+            var result = new Dictionary<string, (int, BasicBlock)>();
+
+            foreach (var block in loop)
+            {
+                foreach (var inst in block.Instructions)
+                {
+                    // Pattern: i = i + c or i = i - c
+                    if (inst is IRBinaryOp binOp &&
+                        (binOp.Operation == BinaryOpKind.Add || binOp.Operation == BinaryOpKind.Sub))
+                    {
+                        if (binOp.Left is IRVariable leftVar &&
+                            binOp.Name == leftVar.Name &&
+                            binOp.Right is IRConstant constant &&
+                            constant.Value is int increment)
+                        {
+                            int actualIncrement = binOp.Operation == BinaryOpKind.Sub ? -increment : increment;
+                            result[leftVar.Name] = (actualIncrement, block);
+                        }
+                    }
+
+                    // Pattern via assignment: i = i + c
+                    if (inst is IRAssignment assign &&
+                        assign.Target is IRVariable target &&
+                        assign.Value is IRBinaryOp assignBinOp &&
+                        (assignBinOp.Operation == BinaryOpKind.Add || assignBinOp.Operation == BinaryOpKind.Sub))
+                    {
+                        if (assignBinOp.Left is IRVariable innerLeftVar &&
+                            innerLeftVar.Name == target.Name &&
+                            assignBinOp.Right is IRConstant innerConst &&
+                            innerConst.Value is int innerIncrement)
+                        {
+                            int actualIncrement = assignBinOp.Operation == BinaryOpKind.Sub ? -innerIncrement : innerIncrement;
+                            result[target.Name] = (actualIncrement, block);
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Loop fusion - fuse adjacent loops with same bounds to reduce loop overhead
+    /// </summary>
+    public class LoopFusionPass : OptimizationPass
+    {
+        public LoopFusionPass() : base("Loop Fusion") { }
+
+        public override bool Run(IRModule module)
+        {
+            ModificationCount = 0;
+
+            foreach (var function in module.Functions)
+            {
+                if (function.IsExternal) continue;
+
+                var cfg = new ControlFlowGraph(function);
+                cfg.Build();
+                cfg.ComputeDominators();
+                cfg.IdentifyLoops();
+
+                // Find pairs of adjacent loops that can be fused
+                var fusionCandidates = FindFusionCandidates(cfg.NaturalLoops, function);
+
+                foreach (var (loop1, loop2) in fusionCandidates)
+                {
+                    if (CanFuse(loop1, loop2, function))
+                    {
+                        FuseLoops(loop1, loop2, function);
+                    }
+                }
+            }
+
+            return ModificationCount > 0;
+        }
+
+        private List<(List<BasicBlock>, List<BasicBlock>)> FindFusionCandidates(
+            List<List<BasicBlock>> loops, IRFunction function)
+        {
+            var candidates = new List<(List<BasicBlock>, List<BasicBlock>)>();
+            if (loops.Count < 2) return candidates;
+
+            // Sort loops by their header position in the block list
+            var sortedLoops = loops
+                .Where(l => l.Count > 0)
+                .OrderBy(l => function.Blocks.IndexOf(l.First()))
+                .ToList();
+
+            for (int i = 0; i < sortedLoops.Count - 1; i++)
+            {
+                var loop1 = sortedLoops[i];
+                var loop2 = sortedLoops[i + 1];
+
+                // Check if loops are adjacent (no blocks in between)
+                if (AreLoopsAdjacent(loop1, loop2, function))
+                {
+                    candidates.Add((loop1, loop2));
+                }
+            }
+
+            return candidates;
+        }
+
+        private bool AreLoopsAdjacent(List<BasicBlock> loop1, List<BasicBlock> loop2, IRFunction function)
+        {
+            // Find the exit block of loop1 and entry block of loop2
+            var loop1Blocks = new HashSet<BasicBlock>(loop1);
+            var loop2Blocks = new HashSet<BasicBlock>(loop2);
+
+            // Find successors of loop1 that are not in loop1
+            foreach (var block in loop1)
+            {
+                foreach (var succ in block.Successors)
+                {
+                    if (!loop1Blocks.Contains(succ))
+                    {
+                        // Check if this successor leads directly to loop2's header
+                        if (loop2Blocks.Contains(succ) || succ.Successors.Any(s => loop2Blocks.Contains(s)))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private bool CanFuse(List<BasicBlock> loop1, List<BasicBlock> loop2, IRFunction function)
+        {
+            if (loop1.Count == 0 || loop2.Count == 0) return false;
+
+            // Find loop headers
+            var header1 = loop1.FirstOrDefault(b =>
+                b.Name.Contains(".cond") || b.Name.Contains("for.cond") || b.Name.Contains("while.cond"));
+            var header2 = loop2.FirstOrDefault(b =>
+                b.Name.Contains(".cond") || b.Name.Contains("for.cond") || b.Name.Contains("while.cond"));
+
+            if (header1 == null || header2 == null) return false;
+
+            // Check if loops have same bounds
+            var bounds1 = GetLoopBounds(header1);
+            var bounds2 = GetLoopBounds(header2);
+
+            if (bounds1 == null || bounds2 == null) return false;
+            if (bounds1.Value.start != bounds2.Value.start || bounds1.Value.end != bounds2.Value.end) return false;
+
+            // Check for data dependencies between loops
+            if (HasDataDependency(loop1, loop2)) return false;
+
+            // Don't fuse loops with function calls
+            foreach (var block in loop1.Concat(loop2))
+            {
+                foreach (var inst in block.Instructions)
+                {
+                    if (inst is IRCall) return false;
+                }
+            }
+
+            return true;
+        }
+
+        private (int start, int end)? GetLoopBounds(BasicBlock header)
+        {
+            foreach (var inst in header.Instructions)
+            {
+                if (inst is IRCompare compare)
+                {
+                    if (compare.Right is IRConstant endConst && endConst.Value is int endValue)
+                    {
+                        // Assume loop starts at 0 if we can't determine
+                        return (0, endValue);
+                    }
+                }
+            }
+            return null;
+        }
+
+        private bool HasDataDependency(List<BasicBlock> loop1, List<BasicBlock> loop2)
+        {
+            // Collect variables written in loop1
+            var writtenInLoop1 = new HashSet<string>();
+            foreach (var block in loop1)
+            {
+                foreach (var inst in block.Instructions)
+                {
+                    if (inst is IRAssignment assign && assign.Target is IRVariable target)
+                    {
+                        writtenInLoop1.Add(target.Name);
+                    }
+                    else if (inst is IRBinaryOp binOp && !string.IsNullOrEmpty(binOp.Name))
+                    {
+                        writtenInLoop1.Add(binOp.Name);
+                    }
+                    else if (inst is IRArrayStore store)
+                    {
+                        if (store.Array is IRVariable arrayVar)
+                        {
+                            writtenInLoop1.Add(arrayVar.Name);
+                        }
+                    }
+                }
+            }
+
+            // Check if loop2 reads from variables written in loop1
+            foreach (var block in loop2)
+            {
+                foreach (var inst in block.Instructions)
+                {
+                    var usedVars = GetUsedVariables(inst);
+                    if (usedVars.Any(v => writtenInLoop1.Contains(v)))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private HashSet<string> GetUsedVariables(IRInstruction inst)
+        {
+            var used = new HashSet<string>();
+
+            switch (inst)
+            {
+                case IRBinaryOp binOp:
+                    if (binOp.Left is IRVariable leftVar) used.Add(leftVar.Name);
+                    if (binOp.Right is IRVariable rightVar) used.Add(rightVar.Name);
+                    break;
+                case IRUnaryOp unaryOp:
+                    if (unaryOp.Operand is IRVariable opVar) used.Add(opVar.Name);
+                    break;
+                case IRAssignment assign:
+                    if (assign.Value is IRVariable valVar) used.Add(valVar.Name);
+                    break;
+                case IRCompare compare:
+                    if (compare.Left is IRVariable cmpLeft) used.Add(cmpLeft.Name);
+                    if (compare.Right is IRVariable cmpRight) used.Add(cmpRight.Name);
+                    break;
+                case IRGetElementPtr gep:
+                    if (gep.BasePointer is IRVariable gepVar) used.Add(gepVar.Name);
+                    foreach (var idx in gep.Indices)
+                    {
+                        if (idx is IRVariable gepIdx) used.Add(gepIdx.Name);
+                    }
+                    break;
+                case IRArrayStore arrStore:
+                    if (arrStore.Value is IRVariable storeVal) used.Add(storeVal.Name);
+                    if (arrStore.Index is IRVariable storeIdx) used.Add(storeIdx.Name);
+                    break;
+            }
+
+            return used;
+        }
+
+        private void FuseLoops(List<BasicBlock> loop1, List<BasicBlock> loop2, IRFunction function)
+        {
+            // Find loop body blocks (exclude header and latch)
+            var body1 = loop1.Where(b =>
+                !b.Name.Contains(".cond") && !b.Name.Contains(".latch")).ToList();
+            var body2 = loop2.Where(b =>
+                !b.Name.Contains(".cond") && !b.Name.Contains(".latch")).ToList();
+
+            if (body1.Count == 0 || body2.Count == 0) return;
+
+            // Append loop2's body instructions to loop1's body
+            var lastBody1Block = body1.Last();
+            var firstBody2Block = body2.First();
+
+            // Clone instructions from loop2 body to loop1 body
+            foreach (var block in body2)
+            {
+                foreach (var inst in block.Instructions.ToList())
+                {
+                    // Skip terminators
+                    if (inst is IRBranch || inst is IRConditionalBranch) continue;
+
+                    lastBody1Block.Instructions.Add(inst);
+                }
+            }
+
+            // Remove loop2 blocks from function
+            foreach (var block in loop2)
+            {
+                function.Blocks.Remove(block);
+            }
+
+            // Update branch target from loop1 exit to skip loop2
+            var loop1Exit = loop1.FirstOrDefault(b =>
+                b.Successors.Any(s => !loop1.Contains(s)));
+            if (loop1Exit != null)
+            {
+                var terminator = loop1Exit.GetTerminator();
+                if (terminator is IRConditionalBranch condBranch)
+                {
+                    // Update false branch to point past loop2
+                    var loop2Exit = loop2.FirstOrDefault(b =>
+                        b.Successors.Any(s => !loop2.Contains(s)));
+                    if (loop2Exit != null)
+                    {
+                        var nextBlock = loop2Exit.Successors.FirstOrDefault(s => !loop2.Contains(s));
+                        if (nextBlock != null)
+                        {
+                            condBranch.FalseTarget = nextBlock;
+                        }
+                    }
+                }
+            }
+
+            ModificationCount++;
         }
     }
 }

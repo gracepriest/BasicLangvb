@@ -53,6 +53,25 @@ namespace BasicLang.Compiler.LSP
                 ("Exit", "Exit statement", "Exit ${1|For,While,Do,Sub,Function|}"),
                 ("Try", "Try-Catch block", "Try\n\t$0\nCatch ex As Exception\n\t\nEnd Try"),
                 ("Property", "Property declaration", "Property ${1:Name} As ${2:Integer}\n\tGet\n\t\tReturn ${3:_value}\n\tEnd Get\n\tSet(value As ${2:Integer})\n\t\t${3:_value} = value\n\tEnd Set\nEnd Property"),
+
+                // Additional common patterns
+                ("For Each", "For Each loop", "For Each ${1:item} In ${2:collection}\n\t$0\nNext"),
+                ("Interface", "Interface declaration", "Interface ${1:IName}\n\t$0\nEnd Interface"),
+                ("Enum", "Enumeration declaration", "Enum ${1:Name}\n\t${2:Value1}\n\t${3:Value2}\nEnd Enum"),
+                ("Structure", "Structure declaration", "Structure ${1:Name}\n\tPublic ${2:field} As ${3:Integer}\nEnd Structure"),
+                ("With", "With block", "With ${1:object}\n\t$0\nEnd With"),
+                ("Using", "Using statement", "Using ${1:resource} = ${2:New Resource()}\n\t$0\nEnd Using"),
+                ("If...ElseIf", "If-ElseIf-Else statement", "If ${1:condition1} Then\n\t$2\nElseIf ${3:condition2} Then\n\t$4\nElse\n\t$0\nEnd If"),
+                ("Function Async", "Async function declaration", "Async Function ${1:Name}() As Task(Of ${2:Integer})\n\t$0\nEnd Function"),
+                ("Sub Async", "Async subroutine declaration", "Async Sub ${1:Name}()\n\t$0\nEnd Sub"),
+                ("Lambda", "Lambda expression", "Function(${1:x}) ${2:x + 1}"),
+                ("Event", "Event declaration", "Event ${1:OnEvent}(sender As Object, e As EventArgs)"),
+                ("RaiseEvent", "Raise event", "RaiseEvent ${1:OnEvent}(Me, EventArgs.Empty)"),
+                ("Implements Method", "Method implementing interface", "Public Function ${1:MethodName}(${2:param} As ${3:Integer}) As ${4:Integer} Implements ${5:IInterface}.${1:MethodName}\n\t$0\nEnd Function"),
+                ("Overrides Method", "Method overriding base", "Public Overrides Function ${1:MethodName}(${2:param} As ${3:Integer}) As ${4:Integer}\n\t$0\nEnd Function"),
+                ("Constructor", "Class constructor", "Public Sub New(${1:param} As ${2:Integer})\n\t$0\nEnd Sub"),
+                ("Singleton", "Singleton pattern", "Private Shared _instance As ${1:ClassName}\nPrivate Sub New()\nEnd Sub\n\nPublic Shared ReadOnly Property Instance As ${1:ClassName}\n\tGet\n\t\tIf _instance Is Nothing Then\n\t\t\t_instance = New ${1:ClassName}()\n\t\tEnd If\n\t\tReturn _instance\n\tEnd Get\nEnd Property"),
+                ("IDisposable", "IDisposable implementation", "Private _disposed As Boolean = False\n\nProtected Overridable Sub Dispose(disposing As Boolean)\n\tIf Not _disposed Then\n\t\tIf disposing Then\n\t\t\t' Dispose managed resources\n\t\t\t$0\n\t\tEnd If\n\t\t_disposed = True\n\tEnd If\nEnd Sub\n\nPublic Sub Dispose()\n\tDispose(True)\nEnd Sub"),
             };
 
             foreach (var (label, detail, snippet) in keywords)
@@ -151,6 +170,33 @@ namespace BasicLang.Compiler.LSP
                 ("UBound", "Returns upper bound of array", "UBound(${1:arr})", "Integer"),
                 ("LBound", "Returns lower bound of array", "LBound(${1:arr})", "Integer"),
                 ("Array", "Creates an array", "Array(${1:values})", "Variant()"),
+
+                // Collection functions
+                ("CreateList", "Creates a new List", "CreateList()", "List"),
+                ("ListAdd", "Adds item to list", "ListAdd(${1:list}, ${2:item})", "Sub"),
+                ("ListGet", "Gets item from list", "ListGet(${1:list}, ${2:index})", "Object"),
+                ("ListSet", "Sets item in list", "ListSet(${1:list}, ${2:index}, ${3:value})", "Sub"),
+                ("ListCount", "Gets list count", "ListCount(${1:list})", "Integer"),
+                ("ListRemove", "Removes item from list", "ListRemove(${1:list}, ${2:index})", "Sub"),
+                ("ListContains", "Checks if list contains item", "ListContains(${1:list}, ${2:item})", "Boolean"),
+                ("CreateDictionary", "Creates a new Dictionary", "CreateDictionary()", "Dictionary"),
+                ("DictSet", "Sets key-value in dictionary", "DictSet(${1:dict}, ${2:key}, ${3:value})", "Sub"),
+                ("DictGet", "Gets value from dictionary", "DictGet(${1:dict}, ${2:key})", "Object"),
+                ("DictRemove", "Removes key from dictionary", "DictRemove(${1:dict}, ${2:key})", "Sub"),
+                ("DictContainsKey", "Checks if dictionary has key", "DictContainsKey(${1:dict}, ${2:key})", "Boolean"),
+                ("CreateHashSet", "Creates a new HashSet", "CreateHashSet()", "HashSet"),
+                ("SetAdd", "Adds item to set", "SetAdd(${1:set}, ${2:item})", "Boolean"),
+                ("SetContains", "Checks if set contains item", "SetContains(${1:set}, ${2:item})", "Boolean"),
+                ("SetRemove", "Removes item from set", "SetRemove(${1:set}, ${2:item})", "Boolean"),
+
+                // LINQ-style functions
+                ("Where", "Filters collection", "Where(${1:collection}, Function(x) ${2:x > 0})", "IEnumerable"),
+                ("Select", "Projects collection", "Select(${1:collection}, Function(x) ${2:x * 2})", "IEnumerable"),
+                ("OrderBy", "Sorts collection", "OrderBy(${1:collection}, Function(x) ${2:x})", "IEnumerable"),
+                ("FirstOrDefault", "Gets first or default", "FirstOrDefault(${1:collection})", "Object"),
+                ("LastOrDefault", "Gets last or default", "LastOrDefault(${1:collection})", "Object"),
+                ("ToList", "Converts to list", "ToList(${1:collection})", "List"),
+                ("ToArray", "Converts to array", "ToArray(${1:collection})", "Array"),
             };
 
             foreach (var (name, detail, snippet, returnType) in functions)

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using BasicLang.Compiler.AST;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
 using BasicLang.Compiler.StdLib;
@@ -544,6 +545,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 classDecl += " : " + string.Join(", ", irClass.Interfaces.Select(SanitizeName));
             }
 
+            // Generate constraint clauses for generic type parameters
+            var constraints = GenerateConstraintClauses(irClass.GenericTypeParams);
+            if (!string.IsNullOrEmpty(constraints))
+            {
+                classDecl += constraints;
+            }
+
             WriteLine(classDecl);
             WriteLine("{");
             Indent();
@@ -870,14 +878,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// <summary>
         /// Map IR access modifier to C# string
         /// </summary>
-        private string MapAccessModifier(AccessModifier access)
+        private string MapAccessModifier(IR.AccessModifier access)
         {
             return access switch
             {
-                AccessModifier.Public => "public",
-                AccessModifier.Private => "private",
-                AccessModifier.Protected => "protected",
-                AccessModifier.Friend => "internal",
+                IR.AccessModifier.Public => "public",
+                IR.AccessModifier.Private => "private",
+                IR.AccessModifier.Protected => "protected",
+                IR.AccessModifier.Friend => "internal",
                 _ => "private"
             };
         }
@@ -989,7 +997,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     actualReturnType = $"IEnumerable<{returnType}>";
             }
 
-            WriteLine($"{_options.MethodAccessModifier} static {asyncModifier}{actualReturnType} {functionName}{genericParams}({parameters})");
+            // Generate constraint clauses for generic type parameters
+            var constraints = GenerateConstraintClauses(function.GenericTypeParams);
+
+            WriteLine($"{_options.MethodAccessModifier} static {asyncModifier}{actualReturnType} {functionName}{genericParams}({parameters}){constraints}");
 
             WriteLine("{");
             Indent();
@@ -1382,7 +1393,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine("{");
             Indent();
 
-            // Group cases by their target block
+            // Group value cases by their target block
             var casesByBlock = new Dictionary<BasicBlock, List<IRValue>>();
             foreach (var (caseValue, target) in switchInst.Cases)
             {
@@ -1391,47 +1402,46 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 casesByBlock[target].Add(caseValue);
             }
 
+            // Group pattern cases by their target block
+            var patternsByBlock = new Dictionary<BasicBlock, List<IRPatternCase>>();
+            foreach (var patternCase in switchInst.PatternCases)
+            {
+                if (!patternsByBlock.ContainsKey(patternCase.Target))
+                    patternsByBlock[patternCase.Target] = new List<IRPatternCase>();
+                patternsByBlock[patternCase.Target].Add(patternCase);
+            }
+
             // Emit each case group with inline body
             foreach (var (block, caseValues) in casesByBlock)
             {
-                // Emit case labels
+                // Emit value case labels
                 foreach (var caseValue in caseValues)
                 {
                     var caseExpr = EmitExpression(caseValue);
                     WriteLine($"case {caseExpr}:");
                 }
 
-                // Mark block as processed so it's not emitted again
-                _processedBlocks.Add(block);
-
-                // Emit the case body with indentation
-                Indent();
-                EmitBlockInstructions(block);
-
-                // Check if block ends with a return (no break needed)
-                var terminator = block.Instructions.LastOrDefault();
-                if (terminator is IRReturn)
+                // Also emit pattern cases for this block
+                if (patternsByBlock.TryGetValue(block, out var patterns))
                 {
-                    // Return already emitted
-                }
-                else if (terminator is IRBranch br && br.Target.Name.Contains("switch.end"))
-                {
-                    // Jump to switch end - emit break
-                    WriteLine("break;");
-                }
-                else if (terminator is IRBranch branch)
-                {
-                    // Process the branch target (might have more code)
-                    HandleUnconditionalBranch(branch);
-                    WriteLine("break;");
-                }
-                else
-                {
-                    // Default: add break
-                    WriteLine("break;");
+                    foreach (var pattern in patterns)
+                    {
+                        EmitPatternCase(pattern);
+                    }
+                    patternsByBlock.Remove(block);
                 }
 
-                Unindent();
+                EmitCaseBody(block);
+            }
+
+            // Emit remaining pattern-only cases (blocks with patterns but no value cases)
+            foreach (var (block, patterns) in patternsByBlock)
+            {
+                foreach (var pattern in patterns)
+                {
+                    EmitPatternCase(pattern);
+                }
+                EmitCaseBody(block);
             }
 
             // Emit default case
@@ -1461,6 +1471,95 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 GenerateStructuredBlock(endBlock);
             }
+        }
+
+        private void EmitPatternCase(IRPatternCase pattern)
+        {
+            switch (pattern)
+            {
+                case IRTypePatternCase typePattern:
+                    var typeName = MapTypeName(typePattern.TypeName);
+                    if (!string.IsNullOrEmpty(typePattern.BindingVariable))
+                    {
+                        WriteLine($"case {typeName} {typePattern.BindingVariable}:");
+                    }
+                    else
+                    {
+                        WriteLine($"case {typeName}:");
+                    }
+                    break;
+
+                case IRRangePatternCase rangePattern:
+                    var lower = EmitExpression(rangePattern.LowerBound);
+                    var upper = EmitExpression(rangePattern.UpperBound);
+                    // C# 9+ relational pattern: >= lower and <= upper
+                    WriteLine($"case >= {lower} and <= {upper}:");
+                    break;
+
+                case IRComparisonPatternCase compPattern:
+                    var compValue = EmitExpression(compPattern.CompareValue);
+                    var op = compPattern.Operator switch
+                    {
+                        ">" => ">",
+                        "<" => "<",
+                        ">=" => ">=",
+                        "<=" => "<=",
+                        "=" => "==",  // Note: not supported directly, needs workaround
+                        "<>" => "!=",
+                        _ => compPattern.Operator
+                    };
+                    // C# 9+ relational pattern
+                    if (op == "==" || op == "!=")
+                    {
+                        // For equality, use when clause
+                        WriteLine($"case var _temp when _temp {op} {compValue}:");
+                    }
+                    else
+                    {
+                        WriteLine($"case {op} {compValue}:");
+                    }
+                    break;
+
+                case IRConstantPatternCase constPattern:
+                    var constValue = EmitExpression(constPattern.Value);
+                    WriteLine($"case {constValue}:");
+                    break;
+            }
+        }
+
+        private void EmitCaseBody(BasicBlock block)
+        {
+            // Mark block as processed so it's not emitted again
+            _processedBlocks.Add(block);
+
+            // Emit the case body with indentation
+            Indent();
+            EmitBlockInstructions(block);
+
+            // Check if block ends with a return (no break needed)
+            var terminator = block.Instructions.LastOrDefault();
+            if (terminator is IRReturn)
+            {
+                // Return already emitted
+            }
+            else if (terminator is IRBranch br && br.Target.Name.Contains("switch.end"))
+            {
+                // Jump to switch end - emit break
+                WriteLine("break;");
+            }
+            else if (terminator is IRBranch branch)
+            {
+                // Process the branch target (might have more code)
+                HandleUnconditionalBranch(branch);
+                WriteLine("break;");
+            }
+            else
+            {
+                // Default: add break
+                WriteLine("break;");
+            }
+
+            Unindent();
         }
 
         private bool IsLoopHeader(BasicBlock trueBlock, BasicBlock falseBlock,
@@ -2008,6 +2107,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         return $"{obj}.{fieldName}";
                     }
 
+                    case IRTupleElement tupleElem:
+                    {
+                        var tuple = EmitExpression(tupleElem.Tuple, stack, false);
+                        // Access tuple element using Item1, Item2, etc. (1-based indexing)
+                        return $"{tuple}.Item{tupleElem.Index + 1}";
+                    }
+
                     case IRAlloca alloca:
                     {
                         // IRBuilder sometimes uses <name>_addr as an address placeholder.
@@ -2466,6 +2572,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine($"{obj}.{fieldName} = {value};");
         }
 
+        public void Visit(IRTupleElement tupleElement)
+        {
+            var tuple = EmitExpression(tupleElement.Tuple);
+            var varName = SanitizeName(tupleElement.Name);
+            var type = MapType(tupleElement.Type);
+            // Access tuple element using Item1, Item2, etc. (1-based indexing)
+            WriteLine($"{type} {varName} = {tuple}.Item{tupleElement.Index + 1};");
+        }
+
         // ====================================================================
         // Helper Methods
         // ====================================================================
@@ -2488,6 +2603,58 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return $"{f}f";
 
             return constant.Value.ToString();
+        }
+
+        /// <summary>
+        /// Generate C# where clauses for generic type parameter constraints
+        /// </summary>
+        private string GenerateConstraintClauses(List<GenericTypeParameter> typeParams)
+        {
+            if (typeParams == null || typeParams.Count == 0)
+                return "";
+
+            var clauses = new List<string>();
+
+            foreach (var param in typeParams)
+            {
+                if (param.Constraints == null || param.Constraints.Count == 0)
+                    continue;
+
+                var constraints = new List<string>();
+
+                // Class/struct constraints must come first
+                foreach (var c in param.Constraints)
+                {
+                    if (c.Kind == GenericConstraintKind.Class)
+                        constraints.Insert(0, "class");
+                    else if (c.Kind == GenericConstraintKind.Structure)
+                        constraints.Insert(0, "struct");
+                }
+
+                // Then type constraints (interfaces, base classes)
+                foreach (var c in param.Constraints)
+                {
+                    if (c.Kind == GenericConstraintKind.Type && !string.IsNullOrEmpty(c.TypeName))
+                        constraints.Add(c.TypeName);
+                }
+
+                // new() constraint must come last
+                foreach (var c in param.Constraints)
+                {
+                    if (c.Kind == GenericConstraintKind.New)
+                        constraints.Add("new()");
+                }
+
+                if (constraints.Count > 0)
+                {
+                    clauses.Add($"where {param.Name} : {string.Join(", ", constraints)}");
+                }
+            }
+
+            if (clauses.Count == 0)
+                return "";
+
+            return " " + string.Join(" ", clauses);
         }
 
         private string MapType(TypeInfo type)
@@ -2540,7 +2707,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private string GetDefaultValue(TypeInfo type)
         {
             if (type == null)
-                return "null";
+                return "default";
 
             var typeName = type.Name?.ToLower() ?? "";
 
@@ -2553,9 +2720,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 "boolean" => "false",
                 "char" => "'\\0'",
                 "string" => "\"\"",
-                _ when type.Kind == TypeKind.Array => "null",
-                _ when type.Kind == TypeKind.Pointer => "null",
-                _ => "null"
+                _ when type.Kind == TypeKind.Array => "default!",
+                _ when type.Kind == TypeKind.Pointer => "default",
+                _ when type.Kind == TypeKind.TypeParameter => "default!",  // Generic type parameter T
+                _ when type.Kind == TypeKind.Structure => "default",       // Value types
+                _ when type.Kind == TypeKind.Class => "default!",          // Reference types
+                _ => "default!"  // Use default for unknown types (safe for both value and reference types)
             };
         }
 

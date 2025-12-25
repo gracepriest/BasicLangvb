@@ -56,6 +56,37 @@ namespace BasicLang.Compiler.StdLib.MSIL
             ["CSng"] = new StdLibFunction { Name = "CSng", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Single" },
             ["CStr"] = new StdLibFunction { Name = "CStr", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "String" },
             ["CBool"] = new StdLibFunction { Name = "CBool", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Boolean" },
+
+            // Collections - List operations
+            ["CreateList"] = new StdLibFunction { Name = "CreateList", Category = StdLibCategory.Collections, ParameterTypes = Array.Empty<string>(), ReturnType = "List" },
+            ["ListAdd"] = new StdLibFunction { Name = "ListAdd", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Object" }, ReturnType = "Void" },
+            ["ListGet"] = new StdLibFunction { Name = "ListGet", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Integer" }, ReturnType = "Object" },
+            ["ListSet"] = new StdLibFunction { Name = "ListSet", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Integer", "Object" }, ReturnType = "Void" },
+            ["ListRemove"] = new StdLibFunction { Name = "ListRemove", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Object" }, ReturnType = "Boolean" },
+            ["ListRemoveAt"] = new StdLibFunction { Name = "ListRemoveAt", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Integer" }, ReturnType = "Void" },
+            ["ListCount"] = new StdLibFunction { Name = "ListCount", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List" }, ReturnType = "Integer" },
+            ["ListContains"] = new StdLibFunction { Name = "ListContains", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Object" }, ReturnType = "Boolean" },
+            ["ListIndexOf"] = new StdLibFunction { Name = "ListIndexOf", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Object" }, ReturnType = "Integer" },
+            ["ListClear"] = new StdLibFunction { Name = "ListClear", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List" }, ReturnType = "Void" },
+            ["ListInsert"] = new StdLibFunction { Name = "ListInsert", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Integer", "Object" }, ReturnType = "Void" },
+
+            // Collections - Dictionary operations
+            ["CreateDictionary"] = new StdLibFunction { Name = "CreateDictionary", Category = StdLibCategory.Collections, ParameterTypes = Array.Empty<string>(), ReturnType = "Dictionary" },
+            ["DictAdd"] = new StdLibFunction { Name = "DictAdd", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object", "Object" }, ReturnType = "Void" },
+            ["DictGet"] = new StdLibFunction { Name = "DictGet", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object" }, ReturnType = "Object" },
+            ["DictSet"] = new StdLibFunction { Name = "DictSet", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object", "Object" }, ReturnType = "Void" },
+            ["DictRemove"] = new StdLibFunction { Name = "DictRemove", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object" }, ReturnType = "Boolean" },
+            ["DictCount"] = new StdLibFunction { Name = "DictCount", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary" }, ReturnType = "Integer" },
+            ["DictContainsKey"] = new StdLibFunction { Name = "DictContainsKey", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object" }, ReturnType = "Boolean" },
+            ["DictClear"] = new StdLibFunction { Name = "DictClear", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary" }, ReturnType = "Void" },
+
+            // Collections - HashSet operations
+            ["CreateHashSet"] = new StdLibFunction { Name = "CreateHashSet", Category = StdLibCategory.Collections, ParameterTypes = Array.Empty<string>(), ReturnType = "HashSet" },
+            ["SetAdd"] = new StdLibFunction { Name = "SetAdd", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet", "Object" }, ReturnType = "Boolean" },
+            ["SetRemove"] = new StdLibFunction { Name = "SetRemove", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet", "Object" }, ReturnType = "Boolean" },
+            ["SetContains"] = new StdLibFunction { Name = "SetContains", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet", "Object" }, ReturnType = "Boolean" },
+            ["SetCount"] = new StdLibFunction { Name = "SetCount", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet" }, ReturnType = "Integer" },
+            ["SetClear"] = new StdLibFunction { Name = "SetClear", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet" }, ReturnType = "Void" },
         };
 
         public bool CanHandle(string functionName) => _functions.ContainsKey(functionName);
@@ -72,6 +103,7 @@ namespace BasicLang.Compiler.StdLib.MSIL
                 StdLibCategory.Math => EmitMathCall(functionName, arguments),
                 StdLibCategory.Array => EmitArrayCall(functionName, arguments),
                 StdLibCategory.Conversion => EmitConversionCall(functionName, arguments),
+                StdLibCategory.Collections => EmitCollectionsCall(functionName, arguments),
                 _ => null
             };
         }
@@ -295,6 +327,80 @@ namespace BasicLang.Compiler.StdLib.MSIL
             "ldc.i4.0\n" +
             "cgt.un";
         public string EmitCChar(string value) => "conv.u2";
+
+        #endregion
+
+        #region Collections Emissions
+
+        private string EmitCollectionsCall(string functionName, string[] args)
+        {
+            return functionName.ToLower() switch
+            {
+                // List operations
+                "createlist" => EmitCreateList(),
+                "listadd" => EmitListAdd(args[0], args[1]),
+                "listget" => EmitListGet(args[0], args[1]),
+                "listset" => EmitListSet(args[0], args[1], args[2]),
+                "listremove" => EmitListRemove(args[0], args[1]),
+                "listremoveat" => EmitListRemoveAt(args[0], args[1]),
+                "listcount" => EmitListCount(args[0]),
+                "listcontains" => EmitListContains(args[0], args[1]),
+                "listindexof" => EmitListIndexOf(args[0], args[1]),
+                "listclear" => EmitListClear(args[0]),
+                "listinsert" => EmitListInsert(args[0], args[1], args[2]),
+
+                // Dictionary operations
+                "createdictionary" => EmitCreateDictionary(),
+                "dictadd" => EmitDictAdd(args[0], args[1], args[2]),
+                "dictget" => EmitDictGet(args[0], args[1]),
+                "dictset" => EmitDictSet(args[0], args[1], args[2]),
+                "dictremove" => EmitDictRemove(args[0], args[1]),
+                "dictcount" => EmitDictCount(args[0]),
+                "dictcontainskey" => EmitDictContainsKey(args[0], args[1]),
+                "dictclear" => EmitDictClear(args[0]),
+
+                // HashSet operations
+                "createhashset" => EmitCreateHashSet(),
+                "setadd" => EmitSetAdd(args[0], args[1]),
+                "setremove" => EmitSetRemove(args[0], args[1]),
+                "setcontains" => EmitSetContains(args[0], args[1]),
+                "setcount" => EmitSetCount(args[0]),
+                "setclear" => EmitSetClear(args[0]),
+
+                _ => null
+            };
+        }
+
+        // List operations using System.Collections.Generic.List<object>
+        public string EmitCreateList() => "newobj instance void class [mscorlib]System.Collections.Generic.List`1<object>::.ctor()";
+        public string EmitListAdd(string list, string item) => "callvirt instance void class [mscorlib]System.Collections.Generic.List`1<object>::Add(!0)";
+        public string EmitListGet(string list, string index) => "callvirt instance !0 class [mscorlib]System.Collections.Generic.List`1<object>::get_Item(int32)";
+        public string EmitListSet(string list, string index, string value) => "callvirt instance void class [mscorlib]System.Collections.Generic.List`1<object>::set_Item(int32, !0)";
+        public string EmitListRemove(string list, string item) => "callvirt instance bool class [mscorlib]System.Collections.Generic.List`1<object>::Remove(!0)";
+        public string EmitListRemoveAt(string list, string index) => "callvirt instance void class [mscorlib]System.Collections.Generic.List`1<object>::RemoveAt(int32)";
+        public string EmitListCount(string list) => "callvirt instance int32 class [mscorlib]System.Collections.Generic.List`1<object>::get_Count()";
+        public string EmitListContains(string list, string item) => "callvirt instance bool class [mscorlib]System.Collections.Generic.List`1<object>::Contains(!0)";
+        public string EmitListIndexOf(string list, string item) => "callvirt instance int32 class [mscorlib]System.Collections.Generic.List`1<object>::IndexOf(!0)";
+        public string EmitListClear(string list) => "callvirt instance void class [mscorlib]System.Collections.Generic.List`1<object>::Clear()";
+        public string EmitListInsert(string list, string index, string item) => "callvirt instance void class [mscorlib]System.Collections.Generic.List`1<object>::Insert(int32, !0)";
+
+        // Dictionary operations using System.Collections.Generic.Dictionary<object, object>
+        public string EmitCreateDictionary() => "newobj instance void class [mscorlib]System.Collections.Generic.Dictionary`2<object,object>::.ctor()";
+        public string EmitDictAdd(string dict, string key, string value) => "callvirt instance void class [mscorlib]System.Collections.Generic.Dictionary`2<object,object>::Add(!0, !1)";
+        public string EmitDictGet(string dict, string key) => "callvirt instance !1 class [mscorlib]System.Collections.Generic.Dictionary`2<object,object>::get_Item(!0)";
+        public string EmitDictSet(string dict, string key, string value) => "callvirt instance void class [mscorlib]System.Collections.Generic.Dictionary`2<object,object>::set_Item(!0, !1)";
+        public string EmitDictRemove(string dict, string key) => "callvirt instance bool class [mscorlib]System.Collections.Generic.Dictionary`2<object,object>::Remove(!0)";
+        public string EmitDictCount(string dict) => "callvirt instance int32 class [mscorlib]System.Collections.Generic.Dictionary`2<object,object>::get_Count()";
+        public string EmitDictContainsKey(string dict, string key) => "callvirt instance bool class [mscorlib]System.Collections.Generic.Dictionary`2<object,object>::ContainsKey(!0)";
+        public string EmitDictClear(string dict) => "callvirt instance void class [mscorlib]System.Collections.Generic.Dictionary`2<object,object>::Clear()";
+
+        // HashSet operations using System.Collections.Generic.HashSet<object>
+        public string EmitCreateHashSet() => "newobj instance void class [mscorlib]System.Collections.Generic.HashSet`1<object>::.ctor()";
+        public string EmitSetAdd(string set, string item) => "callvirt instance bool class [mscorlib]System.Collections.Generic.HashSet`1<object>::Add(!0)";
+        public string EmitSetRemove(string set, string item) => "callvirt instance bool class [mscorlib]System.Collections.Generic.HashSet`1<object>::Remove(!0)";
+        public string EmitSetContains(string set, string item) => "callvirt instance bool class [mscorlib]System.Collections.Generic.HashSet`1<object>::Contains(!0)";
+        public string EmitSetCount(string set) => "callvirt instance int32 class [mscorlib]System.Collections.Generic.HashSet`1<object>::get_Count()";
+        public string EmitSetClear(string set) => "callvirt instance void class [mscorlib]System.Collections.Generic.HashSet`1<object>::Clear()";
 
         #endregion
     }

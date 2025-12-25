@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using BasicLang.Compiler.AST;
 using BasicLang.Compiler.SemanticAnalysis;
 
 namespace BasicLang.Compiler.IR
@@ -58,6 +59,7 @@ namespace BasicLang.Compiler.IR
         void Visit(IRBaseMethodCall baseCall);
         void Visit(IRFieldAccess fieldAccess);
         void Visit(IRFieldStore fieldStore);
+        void Visit(IRTupleElement tupleElement);
     }
     
     // ============================================================================
@@ -357,6 +359,80 @@ namespace BasicLang.Compiler.IR
             $"br {Condition}, {TrueTarget.Name}, {FalseTarget.Name}";
     }
     
+    // ============================================================================
+    // Pattern Matching IR Types
+    // ============================================================================
+
+    /// <summary>
+    /// Base class for pattern cases in switch statements
+    /// </summary>
+    public abstract class IRPatternCase
+    {
+        public BasicBlock Target { get; set; }
+        public string BindingVariable { get; set; }  // Optional variable binding
+
+        protected IRPatternCase(BasicBlock target)
+        {
+            Target = target;
+        }
+    }
+
+    /// <summary>
+    /// Type pattern case: checks if value is of a specific type
+    /// </summary>
+    public class IRTypePatternCase : IRPatternCase
+    {
+        public string TypeName { get; set; }
+
+        public IRTypePatternCase(string typeName, BasicBlock target) : base(target)
+        {
+            TypeName = typeName;
+        }
+    }
+
+    /// <summary>
+    /// Range pattern case: checks if value is within a range (1 To 10)
+    /// </summary>
+    public class IRRangePatternCase : IRPatternCase
+    {
+        public IRValue LowerBound { get; set; }
+        public IRValue UpperBound { get; set; }
+
+        public IRRangePatternCase(IRValue lower, IRValue upper, BasicBlock target) : base(target)
+        {
+            LowerBound = lower;
+            UpperBound = upper;
+        }
+    }
+
+    /// <summary>
+    /// Comparison pattern case: checks if value matches a comparison (> 10, < 5)
+    /// </summary>
+    public class IRComparisonPatternCase : IRPatternCase
+    {
+        public string Operator { get; set; }  // ">", "<", ">=", "<=", "=", "<>"
+        public IRValue CompareValue { get; set; }
+
+        public IRComparisonPatternCase(string op, IRValue value, BasicBlock target) : base(target)
+        {
+            Operator = op;
+            CompareValue = value;
+        }
+    }
+
+    /// <summary>
+    /// Constant pattern case: checks if value equals a constant
+    /// </summary>
+    public class IRConstantPatternCase : IRPatternCase
+    {
+        public IRValue Value { get; set; }
+
+        public IRConstantPatternCase(IRValue value, BasicBlock target) : base(target)
+        {
+            Value = value;
+        }
+    }
+
     /// <summary>
     /// Multi-way branch: switch value, default, [case: label, ...]
     /// </summary>
@@ -365,18 +441,20 @@ namespace BasicLang.Compiler.IR
         public IRValue Value { get; set; }
         public BasicBlock DefaultTarget { get; set; }
         public List<(IRValue CaseValue, BasicBlock Target)> Cases { get; set; }
-        
+        public List<IRPatternCase> PatternCases { get; set; }  // Pattern-based cases
+
         public IRSwitch(IRValue value, BasicBlock defaultTarget)
         {
             Value = value;
             DefaultTarget = defaultTarget;
             Cases = new List<(IRValue, BasicBlock)>();
+            PatternCases = new List<IRPatternCase>();
         }
-        
+
         public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
-        
-        public override string ToString() => 
-            $"switch {Value}, {DefaultTarget.Name}, [{Cases.Count} cases]";
+
+        public override string ToString() =>
+            $"switch {Value}, {DefaultTarget.Name}, [{Cases.Count} cases, {PatternCases.Count} patterns]";
     }
     
     /// <summary>
@@ -710,6 +788,7 @@ namespace BasicLang.Compiler.IR
         public List<IRVariable> LocalVariables { get; set; }
         public bool IsExternal { get; set; }
         public List<string> GenericParameters { get; set; }
+        public List<GenericTypeParameter> GenericTypeParams { get; set; }  // With constraints
         public bool IsAsync { get; set; }
         public bool IsIterator { get; set; }
         public bool IsExtension { get; set; }
@@ -728,6 +807,7 @@ namespace BasicLang.Compiler.IR
             Blocks = new List<BasicBlock>();
             LocalVariables = new List<IRVariable>();
             GenericParameters = new List<string>();
+            GenericTypeParams = new List<GenericTypeParameter>();
             CapturedVariables = new List<(string name, TypeInfo type)>();
         }
         
@@ -992,6 +1072,7 @@ namespace BasicLang.Compiler.IR
         public List<IRConstructor> Constructors { get; set; }
         public List<IREvent> Events { get; set; }
         public List<string> GenericParameters { get; set; }
+        public List<GenericTypeParameter> GenericTypeParams { get; set; }  // With constraints
         public bool IsAbstract { get; set; }
 
         public IRClass(string name)
@@ -1004,6 +1085,7 @@ namespace BasicLang.Compiler.IR
             Constructors = new List<IRConstructor>();
             Events = new List<IREvent>();
             GenericParameters = new List<string>();
+            GenericTypeParams = new List<GenericTypeParameter>();
         }
     }
 
@@ -1184,6 +1266,25 @@ namespace BasicLang.Compiler.IR
 
         public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
         public override string ToString() => $"{Object.Name}.{FieldName} = {Value.Name}";
+    }
+
+    /// <summary>
+    /// Represents accessing an element from a tuple by index
+    /// </summary>
+    public class IRTupleElement : IRValue
+    {
+        public IRValue Tuple { get; set; }
+        public int Index { get; set; }
+
+        public IRTupleElement(IRValue tuple, int index, TypeInfo elementType)
+            : base($"_tuple_elem_{index}", elementType)
+        {
+            Tuple = tuple;
+            Index = index;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+        public override string ToString() => $"{Name} = {Tuple.Name}.Item{Index + 1}";
     }
 
     /// <summary>

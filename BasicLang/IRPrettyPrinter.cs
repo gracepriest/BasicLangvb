@@ -265,6 +265,11 @@ namespace BasicLang.Compiler.IR
         {
             WriteLine(fieldStore.ToString());
         }
+
+        public void Visit(IRTupleElement tupleElement)
+        {
+            WriteLine(tupleElement.ToString());
+        }
     }
 
     /// <summary>

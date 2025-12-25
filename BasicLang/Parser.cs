@@ -316,13 +316,16 @@ namespace BasicLang.Compiler
 
             try
             {
-                // Generic parameters
+                // Generic parameters with optional constraints
+                // e.g., Class Foo(Of T As Class, U As IComparable)
                 if (Match(TokenType.LeftParen) && Check(TokenType.Of))
                 {
                     Consume(TokenType.Of, "Expected 'Of'");
                     do
                     {
-                        node.GenericParameters.Add(Consume(TokenType.Identifier, "Expected type parameter").Lexeme);
+                        var typeParam = ParseGenericTypeParameter();
+                        node.GenericParameters.Add(typeParam.Name);
+                        node.GenericTypeParams.Add(typeParam);
                     } while (Match(TokenType.Comma));
 
                     Consume(TokenType.RightParen, "Expected ')' after generic parameters");
@@ -536,8 +539,11 @@ namespace BasicLang.Compiler
             if (Check(TokenType.Dim))
             {
                 var field = ParseVariableDeclaration();
-                field.Access = access;
-                field.IsStatic = isStatic;
+                if (field is VariableDeclarationNode varDecl)
+                {
+                    varDecl.Access = access;
+                    varDecl.IsStatic = isStatic;
+                }
                 return field;
             }
 
@@ -1391,13 +1397,16 @@ namespace BasicLang.Compiler
             try
             {
                 // Generic type parameters: Function Foo(Of T, U)(...)
+                // With optional constraints: Function Foo(Of T As Class, U As IComparable)(...)
                 if (Check(TokenType.LeftParen) && PeekNext().Type == TokenType.Of)
                 {
                     Advance(); // consume '('
                     Consume(TokenType.Of, "Expected 'Of'");
                     do
                     {
-                        node.GenericParameters.Add(Consume(TokenType.Identifier, "Expected type parameter").Lexeme);
+                        var typeParam = ParseGenericTypeParameter();
+                        node.GenericParameters.Add(typeParam.Name);
+                        node.GenericTypeParams.Add(typeParam);
                     } while (Match(TokenType.Comma));
                     Consume(TokenType.RightParen, "Expected ')' after generic parameters");
                 }
@@ -1457,13 +1466,16 @@ namespace BasicLang.Compiler
             try
             {
                 // Generic type parameters: Sub Foo(Of T, U)(...)
+                // With optional constraints: Sub Foo(Of T As Class, U As IComparable)(...)
                 if (Check(TokenType.LeftParen) && PeekNext().Type == TokenType.Of)
                 {
                     Advance(); // consume '('
                     Consume(TokenType.Of, "Expected 'Of'");
                     do
                     {
-                        node.GenericParameters.Add(Consume(TokenType.Identifier, "Expected type parameter").Lexeme);
+                        var typeParam = ParseGenericTypeParameter();
+                        node.GenericParameters.Add(typeParam.Name);
+                        node.GenericTypeParams.Add(typeParam);
                     } while (Match(TokenType.Comma));
                     Consume(TokenType.RightParen, "Expected ')' after generic parameters");
                 }
@@ -1593,9 +1605,16 @@ namespace BasicLang.Compiler
         // Variable Declarations
         // ====================================================================
 
-        private VariableDeclarationNode ParseVariableDeclaration()
+        private StatementNode ParseVariableDeclaration()
         {
             var token = Consume(TokenType.Dim, "Expected 'Dim'");
+
+            // Check for tuple deconstruction: Dim (x, y) = ...
+            if (Check(TokenType.LeftParen))
+            {
+                return ParseTupleDeconstruction(token);
+            }
+
             var node = new VariableDeclarationNode(token.Line, token.Column);
 
             node.Name = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
@@ -1662,6 +1681,38 @@ namespace BasicLang.Compiler
             return node;
         }
 
+        /// <summary>
+        /// Parse tuple deconstruction: Dim (x, y) = GetPair()
+        /// Or with types: Dim (x As Integer, y As String) = GetPair()
+        /// </summary>
+        private TupleDeconstructionNode ParseTupleDeconstruction(Token dimToken)
+        {
+            var node = new TupleDeconstructionNode(dimToken.Line, dimToken.Column);
+
+            Consume(TokenType.LeftParen, "Expected '(' for tuple deconstruction");
+
+            do
+            {
+                var varName = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
+                TypeReference varType = null;
+
+                // Optional type: x As Integer
+                if (Match(TokenType.As))
+                {
+                    varType = ParseTypeReference();
+                }
+
+                node.Variables.Add((varName, varType));
+
+            } while (Match(TokenType.Comma));
+
+            Consume(TokenType.RightParen, "Expected ')' after tuple variables");
+            Consume(TokenType.Assignment, "Expected '=' after tuple deconstruction pattern");
+            node.Initializer = ParseExpression();
+
+            return node;
+        }
+
         private ConstantDeclarationNode ParseConstantDeclaration()
         {
             var token = Consume(TokenType.Const, "Expected 'Const'");
@@ -1679,6 +1730,56 @@ namespace BasicLang.Compiler
         // ====================================================================
         // Type References
         // ====================================================================
+
+        /// <summary>
+        /// Parse a generic type parameter with optional constraints
+        /// e.g., T, T As Class, T As IComparable, T As {Class, IComparable, New}
+        /// </summary>
+        private GenericTypeParameter ParseGenericTypeParameter()
+        {
+            var name = Consume(TokenType.Identifier, "Expected type parameter name").Lexeme;
+            var param = new GenericTypeParameter(name);
+
+            // Check for constraints: As Class, As Structure, As New, As TypeName
+            if (Match(TokenType.As))
+            {
+                // Check for multiple constraints in braces: As {Class, IComparable, New}
+                if (Match(TokenType.LeftBrace))
+                {
+                    do
+                    {
+                        param.Constraints.Add(ParseSingleConstraint());
+                    } while (Match(TokenType.Comma));
+                    Consume(TokenType.RightBrace, "Expected '}' after constraint list");
+                }
+                else
+                {
+                    // Single constraint
+                    param.Constraints.Add(ParseSingleConstraint());
+                }
+            }
+
+            return param;
+        }
+
+        /// <summary>
+        /// Parse a single constraint: Class, Structure, New, or a type name
+        /// </summary>
+        private GenericConstraint ParseSingleConstraint()
+        {
+            if (Match(TokenType.Class))
+                return new GenericConstraint(GenericConstraintKind.Class);
+
+            if (Match(TokenType.Structure))
+                return new GenericConstraint(GenericConstraintKind.Structure);
+
+            if (Match(TokenType.New))
+                return new GenericConstraint(GenericConstraintKind.New);
+
+            // Must be a type name (interface or base class)
+            var typeName = Consume(TokenType.Identifier, "Expected constraint type name").Lexeme;
+            return new GenericConstraint(GenericConstraintKind.Type, typeName);
+        }
 
         private TypeReference ParseTypeReference()
         {
@@ -2021,7 +2122,16 @@ namespace BasicLang.Compiler
             {
                 do
                 {
-                    node.Values.Add(ParseExpression());
+                    var pattern = ParseCasePattern();
+                    if (pattern != null)
+                    {
+                        node.Patterns.Add(pattern);
+                    }
+                    else
+                    {
+                        // Fallback to expression for simple values
+                        node.Values.Add(ParseExpression());
+                    }
                 } while (Match(TokenType.Comma));
             }
 
@@ -2029,6 +2139,79 @@ namespace BasicLang.Compiler
             node.Body = ParseBlock(TokenType.Case, TokenType.EndSelect);
 
             return node;
+        }
+
+        /// <summary>
+        /// Parse a pattern in a Case clause
+        /// Returns null if the next tokens are not a pattern (fallback to expression)
+        /// </summary>
+        private PatternNode ParseCasePattern()
+        {
+            int startPos = _current;
+
+            // Case Is > 10, Case Is Integer, Case Is Nothing
+            if (Match(TokenType.Is))
+            {
+                // Check for comparison pattern: Case Is > 10
+                if (Check(TokenType.GreaterThan) || Check(TokenType.LessThan) ||
+                    Check(TokenType.GreaterThanOrEqual) || Check(TokenType.LessThanOrEqual) ||
+                    Check(TokenType.Assignment) || Check(TokenType.NotEqual))
+                {
+                    var opToken = Advance();
+                    var op = opToken.Type switch
+                    {
+                        TokenType.GreaterThan => ">",
+                        TokenType.LessThan => "<",
+                        TokenType.GreaterThanOrEqual => ">=",
+                        TokenType.LessThanOrEqual => "<=",
+                        TokenType.Assignment => "=",
+                        TokenType.NotEqual => "<>",
+                        _ => "="
+                    };
+                    var value = ParseExpression();
+                    return new ComparisonPatternNode(startPos, 0) { Operator = op, Value = value };
+                }
+
+                // Check for type pattern: Case Is String, Case Is Integer
+                if (Check(TokenType.Identifier) || Check(TokenType.Integer) || Check(TokenType.String) ||
+                    Check(TokenType.Boolean) || Check(TokenType.Double) || Check(TokenType.Single))
+                {
+                    var typeRef = ParseTypeReference();
+                    return new TypePatternNode(startPos, 0) { MatchType = typeRef };
+                }
+
+                // Rollback if not a valid pattern after Is
+                _current = startPos;
+                return null;
+            }
+
+            // Check for range pattern: Case 1 To 10
+            // We need to look ahead to see if there's a "To" keyword
+            var expr = ParseExpression();
+            if (Match(TokenType.To))
+            {
+                var upperBound = ParseExpression();
+                return new RangePatternNode(startPos, 0)
+                {
+                    LowerBound = expr,
+                    UpperBound = upperBound
+                };
+            }
+
+            // Check for type pattern with binding: Case x As Integer
+            if (expr is IdentifierExpressionNode ident && Match(TokenType.As))
+            {
+                var typeRef = ParseTypeReference();
+                return new TypePatternNode(startPos, 0)
+                {
+                    VariableName = ident.Name,
+                    MatchType = typeRef
+                };
+            }
+
+            // Not a pattern, rollback and return null
+            _current = startPos;
+            return null;
         }
 
         private StatementNode ParseForLoop()

@@ -1301,6 +1301,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine($"{obj}.{fieldName} = {value};");
         }
 
+        public override void Visit(IRTupleElement tupleElement)
+        {
+            var tuple = GetValueName(tupleElement.Tuple);
+            var type = MapType(tupleElement.Type);
+            // C++ uses std::get<index>(tuple)
+            WriteLine($"{type} {SanitizeName(tupleElement.Name)} = std::get<{tupleElement.Index}>({tuple});");
+        }
+
         #endregion
         
         private string MapBinaryOperator(BinaryOpKind op) => op switch

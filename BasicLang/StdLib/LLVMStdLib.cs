@@ -47,6 +47,35 @@ namespace BasicLang.Compiler.StdLib.LLVM
             ["CSng"] = new StdLibFunction { Name = "CSng", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Single" },
             ["CStr"] = new StdLibFunction { Name = "CStr", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "String" },
             ["CBool"] = new StdLibFunction { Name = "CBool", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Boolean" },
+
+            // Collections - List operations (using dynamic arrays)
+            ["CreateList"] = new StdLibFunction { Name = "CreateList", Category = StdLibCategory.Collections, ParameterTypes = Array.Empty<string>(), ReturnType = "List" },
+            ["ListAdd"] = new StdLibFunction { Name = "ListAdd", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Object" }, ReturnType = "Void" },
+            ["ListGet"] = new StdLibFunction { Name = "ListGet", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Integer" }, ReturnType = "Object" },
+            ["ListSet"] = new StdLibFunction { Name = "ListSet", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Integer", "Object" }, ReturnType = "Void" },
+            ["ListRemove"] = new StdLibFunction { Name = "ListRemove", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Object" }, ReturnType = "Boolean" },
+            ["ListRemoveAt"] = new StdLibFunction { Name = "ListRemoveAt", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Integer" }, ReturnType = "Void" },
+            ["ListCount"] = new StdLibFunction { Name = "ListCount", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List" }, ReturnType = "Integer" },
+            ["ListContains"] = new StdLibFunction { Name = "ListContains", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Object" }, ReturnType = "Boolean" },
+            ["ListClear"] = new StdLibFunction { Name = "ListClear", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List" }, ReturnType = "Void" },
+
+            // Collections - Dictionary operations (using hash tables)
+            ["CreateDictionary"] = new StdLibFunction { Name = "CreateDictionary", Category = StdLibCategory.Collections, ParameterTypes = Array.Empty<string>(), ReturnType = "Dictionary" },
+            ["DictAdd"] = new StdLibFunction { Name = "DictAdd", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object", "Object" }, ReturnType = "Void" },
+            ["DictGet"] = new StdLibFunction { Name = "DictGet", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object" }, ReturnType = "Object" },
+            ["DictSet"] = new StdLibFunction { Name = "DictSet", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object", "Object" }, ReturnType = "Void" },
+            ["DictRemove"] = new StdLibFunction { Name = "DictRemove", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object" }, ReturnType = "Boolean" },
+            ["DictCount"] = new StdLibFunction { Name = "DictCount", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary" }, ReturnType = "Integer" },
+            ["DictContainsKey"] = new StdLibFunction { Name = "DictContainsKey", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object" }, ReturnType = "Boolean" },
+            ["DictClear"] = new StdLibFunction { Name = "DictClear", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary" }, ReturnType = "Void" },
+
+            // Collections - HashSet operations
+            ["CreateHashSet"] = new StdLibFunction { Name = "CreateHashSet", Category = StdLibCategory.Collections, ParameterTypes = Array.Empty<string>(), ReturnType = "HashSet" },
+            ["SetAdd"] = new StdLibFunction { Name = "SetAdd", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet", "Object" }, ReturnType = "Boolean" },
+            ["SetRemove"] = new StdLibFunction { Name = "SetRemove", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet", "Object" }, ReturnType = "Boolean" },
+            ["SetContains"] = new StdLibFunction { Name = "SetContains", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet", "Object" }, ReturnType = "Boolean" },
+            ["SetCount"] = new StdLibFunction { Name = "SetCount", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet" }, ReturnType = "Integer" },
+            ["SetClear"] = new StdLibFunction { Name = "SetClear", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet" }, ReturnType = "Void" },
         };
 
         public bool CanHandle(string functionName) => _functions.ContainsKey(functionName);
@@ -63,6 +92,7 @@ namespace BasicLang.Compiler.StdLib.LLVM
                 StdLibCategory.Math => EmitMathCall(functionName, arguments),
                 StdLibCategory.Array => EmitArrayCall(functionName, arguments),
                 StdLibCategory.Conversion => EmitConversionCall(functionName, arguments),
+                StdLibCategory.Collections => EmitCollectionsCall(functionName, arguments),
                 _ => null
             };
         }
@@ -121,6 +151,32 @@ namespace BasicLang.Compiler.StdLib.LLVM
                     yield return "declare i64 @atol(i8*)";
                     yield return "declare double @atof(i8*)";
                     yield return "declare i32 @sprintf(i8*, i8*, ...)";
+                    break;
+                case StdLibCategory.Collections:
+                    // Runtime library functions for collections
+                    yield return "declare i8* @bl_list_create()";
+                    yield return "declare void @bl_list_add(i8*, i8*)";
+                    yield return "declare i8* @bl_list_get(i8*, i32)";
+                    yield return "declare void @bl_list_set(i8*, i32, i8*)";
+                    yield return "declare i1 @bl_list_remove(i8*, i8*)";
+                    yield return "declare void @bl_list_remove_at(i8*, i32)";
+                    yield return "declare i32 @bl_list_count(i8*)";
+                    yield return "declare i1 @bl_list_contains(i8*, i8*)";
+                    yield return "declare void @bl_list_clear(i8*)";
+                    yield return "declare i8* @bl_dict_create()";
+                    yield return "declare void @bl_dict_add(i8*, i8*, i8*)";
+                    yield return "declare i8* @bl_dict_get(i8*, i8*)";
+                    yield return "declare void @bl_dict_set(i8*, i8*, i8*)";
+                    yield return "declare i1 @bl_dict_remove(i8*, i8*)";
+                    yield return "declare i32 @bl_dict_count(i8*)";
+                    yield return "declare i1 @bl_dict_contains_key(i8*, i8*)";
+                    yield return "declare void @bl_dict_clear(i8*)";
+                    yield return "declare i8* @bl_set_create()";
+                    yield return "declare i1 @bl_set_add(i8*, i8*)";
+                    yield return "declare i1 @bl_set_remove(i8*, i8*)";
+                    yield return "declare i1 @bl_set_contains(i8*, i8*)";
+                    yield return "declare i32 @bl_set_count(i8*)";
+                    yield return "declare void @bl_set_clear(i8*)";
                     break;
             }
         }
@@ -286,6 +342,76 @@ define void @bl_randomize() {
         public string EmitCStr(string value) => $"/* CStr - needs sprintf */";
         public string EmitCBool(string value) => $"icmp ne i32 {value}, 0";
         public string EmitCChar(string value) => $"trunc i32 {value} to i8";
+
+        #endregion
+
+        #region Collections Emissions
+
+        private string EmitCollectionsCall(string functionName, string[] args)
+        {
+            return functionName.ToLower() switch
+            {
+                // List operations
+                "createlist" => EmitCreateList(),
+                "listadd" => EmitListAdd(args[0], args[1]),
+                "listget" => EmitListGet(args[0], args[1]),
+                "listset" => EmitListSet(args[0], args[1], args[2]),
+                "listremove" => EmitListRemove(args[0], args[1]),
+                "listremoveat" => EmitListRemoveAt(args[0], args[1]),
+                "listcount" => EmitListCount(args[0]),
+                "listcontains" => EmitListContains(args[0], args[1]),
+                "listclear" => EmitListClear(args[0]),
+
+                // Dictionary operations
+                "createdictionary" => EmitCreateDictionary(),
+                "dictadd" => EmitDictAdd(args[0], args[1], args[2]),
+                "dictget" => EmitDictGet(args[0], args[1]),
+                "dictset" => EmitDictSet(args[0], args[1], args[2]),
+                "dictremove" => EmitDictRemove(args[0], args[1]),
+                "dictcount" => EmitDictCount(args[0]),
+                "dictcontainskey" => EmitDictContainsKey(args[0], args[1]),
+                "dictclear" => EmitDictClear(args[0]),
+
+                // HashSet operations
+                "createhashset" => EmitCreateHashSet(),
+                "setadd" => EmitSetAdd(args[0], args[1]),
+                "setremove" => EmitSetRemove(args[0], args[1]),
+                "setcontains" => EmitSetContains(args[0], args[1]),
+                "setcount" => EmitSetCount(args[0]),
+                "setclear" => EmitSetClear(args[0]),
+
+                _ => null
+            };
+        }
+
+        // List operations - call runtime library functions
+        public string EmitCreateList() => "call i8* @bl_list_create()";
+        public string EmitListAdd(string list, string item) => $"call void @bl_list_add(i8* {list}, i8* {item})";
+        public string EmitListGet(string list, string index) => $"call i8* @bl_list_get(i8* {list}, i32 {index})";
+        public string EmitListSet(string list, string index, string value) => $"call void @bl_list_set(i8* {list}, i32 {index}, i8* {value})";
+        public string EmitListRemove(string list, string item) => $"call i1 @bl_list_remove(i8* {list}, i8* {item})";
+        public string EmitListRemoveAt(string list, string index) => $"call void @bl_list_remove_at(i8* {list}, i32 {index})";
+        public string EmitListCount(string list) => $"call i32 @bl_list_count(i8* {list})";
+        public string EmitListContains(string list, string item) => $"call i1 @bl_list_contains(i8* {list}, i8* {item})";
+        public string EmitListClear(string list) => $"call void @bl_list_clear(i8* {list})";
+
+        // Dictionary operations
+        public string EmitCreateDictionary() => "call i8* @bl_dict_create()";
+        public string EmitDictAdd(string dict, string key, string value) => $"call void @bl_dict_add(i8* {dict}, i8* {key}, i8* {value})";
+        public string EmitDictGet(string dict, string key) => $"call i8* @bl_dict_get(i8* {dict}, i8* {key})";
+        public string EmitDictSet(string dict, string key, string value) => $"call void @bl_dict_set(i8* {dict}, i8* {key}, i8* {value})";
+        public string EmitDictRemove(string dict, string key) => $"call i1 @bl_dict_remove(i8* {dict}, i8* {key})";
+        public string EmitDictCount(string dict) => $"call i32 @bl_dict_count(i8* {dict})";
+        public string EmitDictContainsKey(string dict, string key) => $"call i1 @bl_dict_contains_key(i8* {dict}, i8* {key})";
+        public string EmitDictClear(string dict) => $"call void @bl_dict_clear(i8* {dict})";
+
+        // HashSet operations
+        public string EmitCreateHashSet() => "call i8* @bl_set_create()";
+        public string EmitSetAdd(string set, string item) => $"call i1 @bl_set_add(i8* {set}, i8* {item})";
+        public string EmitSetRemove(string set, string item) => $"call i1 @bl_set_remove(i8* {set}, i8* {item})";
+        public string EmitSetContains(string set, string item) => $"call i1 @bl_set_contains(i8* {set}, i8* {item})";
+        public string EmitSetCount(string set) => $"call i32 @bl_set_count(i8* {set})";
+        public string EmitSetClear(string set) => $"call void @bl_set_clear(i8* {set})";
 
         #endregion
     }

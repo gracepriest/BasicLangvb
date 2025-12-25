@@ -210,7 +210,7 @@ namespace BasicLang.Compiler
         public void Visit(VariableDeclarationNode node)
         {
             var line = $"{node.Access} Var {node.Name} : {node.Type}";
-            
+
             if (node.Initializer != null)
             {
                 line += " = ";
@@ -224,7 +224,17 @@ namespace BasicLang.Compiler
                 WriteLine(line);
             }
         }
-        
+
+        public void Visit(TupleDeconstructionNode node)
+        {
+            var vars = string.Join(", ", node.Variables.Select(v =>
+                v.Type != null ? $"{v.Name} As {v.Type}" : v.Name));
+            WriteLine($"Dim ({vars}) = ");
+            Indent();
+            node.Initializer.Accept(this);
+            Unindent();
+        }
+
         public void Visit(ConstantDeclarationNode node)
         {
             WriteLine($"Const {node.Name} : {node.Type} = ");

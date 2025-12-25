@@ -64,6 +64,16 @@ namespace BasicLang.Compiler.Driver
                 return;
             }
 
+            // Check for file argument (compile a file)
+            var fileArg = args.FirstOrDefault(a => !a.StartsWith("-") &&
+                (a.EndsWith(".bas") || a.EndsWith(".bl") || a.EndsWith(".basic")));
+
+            if (fileArg != null)
+            {
+                CompileFile(fileArg, args);
+                return;
+            }
+
             Console.WriteLine("=".PadRight(70, '='));
             Console.WriteLine("BasicLang Multi-Target Transpiler - Complete Pipeline Demo");
             Console.WriteLine("=".PadRight(70, '='));
@@ -111,17 +121,149 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("Usage: basiclang [options] [source.bas]");
             Console.WriteLine();
             Console.WriteLine("Options:");
-            Console.WriteLine("  --repl, -i      Start interactive REPL");
-            Console.WriteLine("  --lsp           Start Language Server Protocol mode");
-            Console.WriteLine("  --help, -h      Show this help message");
-            Console.WriteLine("  --target=X      Target backend (csharp, cpp, llvm, msil)");
-            Console.WriteLine("  --output=FILE   Output file path");
+            Console.WriteLine("  --repl, -i        Start interactive REPL");
+            Console.WriteLine("  --lsp             Start Language Server Protocol mode");
+            Console.WriteLine("  --debug-adapter   Start Debug Adapter Protocol mode");
+            Console.WriteLine("  --help, -h        Show this help message");
+            Console.WriteLine("  --target=X        Target backend (csharp, cpp, llvm, msil)");
+            Console.WriteLine("  --output=FILE     Output file path");
+            Console.WriteLine("  --optimize        Enable aggressive optimizations");
+            Console.WriteLine("  --search-path=DIR Add module search path");
             Console.WriteLine();
             Console.WriteLine("Examples:");
-            Console.WriteLine("  basiclang --repl                    Start interactive mode");
-            Console.WriteLine("  basiclang --lsp                     Start LSP server for IDE");
-            Console.WriteLine("  basiclang program.bas               Compile program.bas");
-            Console.WriteLine("  basiclang --target=cpp program.bas  Compile to C++");
+            Console.WriteLine("  basiclang --repl                       Start interactive mode");
+            Console.WriteLine("  basiclang --lsp                        Start LSP server for IDE");
+            Console.WriteLine("  basiclang program.bas                  Compile program.bas");
+            Console.WriteLine("  basiclang --target=cpp program.bas     Compile to C++");
+            Console.WriteLine("  basiclang --optimize program.bas       Compile with optimizations");
+        }
+
+        /// <summary>
+        /// Compile a source file using the new multi-file compiler
+        /// </summary>
+        static void CompileFile(string filePath, string[] args)
+        {
+            Console.WriteLine($"Compiling: {filePath}");
+            Console.WriteLine();
+
+            // Parse options
+            var options = new BasicLang.Compiler.CompilerOptions();
+            string targetBackend = "csharp";
+            string outputPath = null;
+
+            foreach (var arg in args)
+            {
+                if (arg.StartsWith("--target="))
+                {
+                    targetBackend = arg.Substring("--target=".Length).ToLowerInvariant();
+                    options.TargetBackend = targetBackend;
+                }
+                else if (arg.StartsWith("--output="))
+                {
+                    outputPath = arg.Substring("--output=".Length);
+                    options.OutputPath = outputPath;
+                }
+                else if (arg == "--optimize" || arg == "-O")
+                {
+                    options.OptimizeAggressive = true;
+                }
+                else if (arg.StartsWith("--search-path="))
+                {
+                    options.SearchPaths.Add(arg.Substring("--search-path=".Length));
+                }
+            }
+
+            // Create compiler and compile
+            var compiler = new BasicCompiler(options);
+            var result = compiler.CompileFile(filePath);
+
+            // Report results
+            if (result.Success)
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"Compilation successful! ({result.Duration.TotalMilliseconds:F0}ms)");
+                Console.ResetColor();
+                Console.WriteLine($"  Files compiled: {result.Units.Count}");
+
+                // Generate output
+                if (result.CombinedIR != null)
+                {
+                    string outputCode = GenerateCode(result.CombinedIR, targetBackend);
+
+                    if (!string.IsNullOrEmpty(outputPath))
+                    {
+                        File.WriteAllText(outputPath, outputCode);
+                        Console.WriteLine($"  Output written to: {outputPath}");
+                    }
+                    else
+                    {
+                        // Default output path
+                        var baseName = Path.GetFileNameWithoutExtension(filePath);
+                        var ext = GetOutputExtension(targetBackend);
+                        var defaultOutputPath = Path.Combine(Path.GetDirectoryName(filePath) ?? ".", baseName + ext);
+                        File.WriteAllText(defaultOutputPath, outputCode);
+                        Console.WriteLine($"  Output written to: {defaultOutputPath}");
+                    }
+                }
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"Compilation failed with {result.AllErrors.Count} error(s):");
+                Console.ResetColor();
+
+                // Group errors for better display
+                var grouped = ErrorGrouper.GroupErrors(result.AllErrors);
+                foreach (var group in grouped)
+                {
+                    Console.WriteLine();
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"  Error at line {group.PrimaryError.Line}: {group.PrimaryError.Message}");
+                    Console.ResetColor();
+
+                    if (!string.IsNullOrEmpty(group.CommonCause))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine($"    Cause: {group.CommonCause}");
+                        Console.ResetColor();
+                    }
+
+                    if (group.RelatedErrors.Count > 0)
+                    {
+                        Console.WriteLine($"    ({group.RelatedErrors.Count} related error(s))");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Generate code for the specified backend
+        /// </summary>
+        static string GenerateCode(IRModule ir, string backend)
+        {
+            ICodeGenerator generator = backend?.ToLowerInvariant() switch
+            {
+                "cpp" or "c++" => new CppCodeGenerator(),
+                "llvm" => new BasicLang.Compiler.CodeGen.LLVM.LLVMCodeGenerator(),
+                "msil" or "il" => new BasicLang.Compiler.CodeGen.MSIL.MSILCodeGenerator(),
+                _ => new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator()  // Default to C#
+            };
+
+            return generator.Generate(ir);
+        }
+
+        /// <summary>
+        /// Get output file extension for backend
+        /// </summary>
+        static string GetOutputExtension(string backend)
+        {
+            return backend?.ToLowerInvariant() switch
+            {
+                "cpp" or "c++" => ".cpp",
+                "llvm" => ".ll",
+                "msil" or "il" => ".il",
+                _ => ".cs"
+            };
         }
 
         // ====================================================================

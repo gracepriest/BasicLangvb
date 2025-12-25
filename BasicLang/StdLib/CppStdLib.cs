@@ -50,6 +50,37 @@ namespace BasicLang.Compiler.StdLib.Cpp
             ["CSng"] = new StdLibFunction { Name = "CSng", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Single" },
             ["CStr"] = new StdLibFunction { Name = "CStr", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "String" },
             ["CBool"] = new StdLibFunction { Name = "CBool", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Boolean" },
+
+            // Collections - List operations (std::vector)
+            ["CreateList"] = new StdLibFunction { Name = "CreateList", Category = StdLibCategory.Collections, ParameterTypes = Array.Empty<string>(), ReturnType = "List" },
+            ["ListAdd"] = new StdLibFunction { Name = "ListAdd", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Object" }, ReturnType = "Void" },
+            ["ListGet"] = new StdLibFunction { Name = "ListGet", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Integer" }, ReturnType = "Object" },
+            ["ListSet"] = new StdLibFunction { Name = "ListSet", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Integer", "Object" }, ReturnType = "Void" },
+            ["ListRemove"] = new StdLibFunction { Name = "ListRemove", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Object" }, ReturnType = "Boolean" },
+            ["ListRemoveAt"] = new StdLibFunction { Name = "ListRemoveAt", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Integer" }, ReturnType = "Void" },
+            ["ListCount"] = new StdLibFunction { Name = "ListCount", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List" }, ReturnType = "Integer" },
+            ["ListContains"] = new StdLibFunction { Name = "ListContains", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Object" }, ReturnType = "Boolean" },
+            ["ListIndexOf"] = new StdLibFunction { Name = "ListIndexOf", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Object" }, ReturnType = "Integer" },
+            ["ListClear"] = new StdLibFunction { Name = "ListClear", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List" }, ReturnType = "Void" },
+            ["ListInsert"] = new StdLibFunction { Name = "ListInsert", Category = StdLibCategory.Collections, ParameterTypes = new[] { "List", "Integer", "Object" }, ReturnType = "Void" },
+
+            // Collections - Dictionary operations (std::unordered_map)
+            ["CreateDictionary"] = new StdLibFunction { Name = "CreateDictionary", Category = StdLibCategory.Collections, ParameterTypes = Array.Empty<string>(), ReturnType = "Dictionary" },
+            ["DictAdd"] = new StdLibFunction { Name = "DictAdd", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object", "Object" }, ReturnType = "Void" },
+            ["DictGet"] = new StdLibFunction { Name = "DictGet", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object" }, ReturnType = "Object" },
+            ["DictSet"] = new StdLibFunction { Name = "DictSet", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object", "Object" }, ReturnType = "Void" },
+            ["DictRemove"] = new StdLibFunction { Name = "DictRemove", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object" }, ReturnType = "Boolean" },
+            ["DictCount"] = new StdLibFunction { Name = "DictCount", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary" }, ReturnType = "Integer" },
+            ["DictContainsKey"] = new StdLibFunction { Name = "DictContainsKey", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary", "Object" }, ReturnType = "Boolean" },
+            ["DictClear"] = new StdLibFunction { Name = "DictClear", Category = StdLibCategory.Collections, ParameterTypes = new[] { "Dictionary" }, ReturnType = "Void" },
+
+            // Collections - HashSet operations (std::unordered_set)
+            ["CreateHashSet"] = new StdLibFunction { Name = "CreateHashSet", Category = StdLibCategory.Collections, ParameterTypes = Array.Empty<string>(), ReturnType = "HashSet" },
+            ["SetAdd"] = new StdLibFunction { Name = "SetAdd", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet", "Object" }, ReturnType = "Boolean" },
+            ["SetRemove"] = new StdLibFunction { Name = "SetRemove", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet", "Object" }, ReturnType = "Boolean" },
+            ["SetContains"] = new StdLibFunction { Name = "SetContains", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet", "Object" }, ReturnType = "Boolean" },
+            ["SetCount"] = new StdLibFunction { Name = "SetCount", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet" }, ReturnType = "Integer" },
+            ["SetClear"] = new StdLibFunction { Name = "SetClear", Category = StdLibCategory.Collections, ParameterTypes = new[] { "HashSet" }, ReturnType = "Void" },
         };
 
         private readonly HashSet<string> _requiredIncludes = new HashSet<string>();
@@ -68,6 +99,7 @@ namespace BasicLang.Compiler.StdLib.Cpp
                 StdLibCategory.Math => EmitMathCall(functionName, arguments),
                 StdLibCategory.Array => EmitArrayCall(functionName, arguments),
                 StdLibCategory.Conversion => EmitConversionCall(functionName, arguments),
+                StdLibCategory.Collections => EmitCollectionsCall(functionName, arguments),
                 _ => null
             };
         }
@@ -96,6 +128,12 @@ namespace BasicLang.Compiler.StdLib.Cpp
                 case StdLibCategory.Conversion:
                     yield return "<string>";
                     yield return "<sstream>";
+                    break;
+                case StdLibCategory.Collections:
+                    yield return "<vector>";
+                    yield return "<unordered_map>";
+                    yield return "<unordered_set>";
+                    yield return "<algorithm>";
                     break;
             }
         }
@@ -277,6 +315,83 @@ inline std::string bl_replace(std::string s, const std::string& from, const std:
         public string EmitCStr(string value) => $"std::to_string({value})";
         public string EmitCBool(string value) => $"static_cast<bool>({value})";
         public string EmitCChar(string value) => $"static_cast<char>({value})";
+
+        #endregion
+
+        #region Collections Emissions
+
+        private string EmitCollectionsCall(string functionName, string[] args)
+        {
+            return functionName.ToLower() switch
+            {
+                // List operations (std::vector)
+                "createlist" => EmitCreateList(),
+                "listadd" => EmitListAdd(args[0], args[1]),
+                "listget" => EmitListGet(args[0], args[1]),
+                "listset" => EmitListSet(args[0], args[1], args[2]),
+                "listremove" => EmitListRemove(args[0], args[1]),
+                "listremoveat" => EmitListRemoveAt(args[0], args[1]),
+                "listcount" => EmitListCount(args[0]),
+                "listcontains" => EmitListContains(args[0], args[1]),
+                "listindexof" => EmitListIndexOf(args[0], args[1]),
+                "listclear" => EmitListClear(args[0]),
+                "listinsert" => EmitListInsert(args[0], args[1], args[2]),
+
+                // Dictionary operations (std::unordered_map)
+                "createdictionary" => EmitCreateDictionary(),
+                "dictadd" => EmitDictAdd(args[0], args[1], args[2]),
+                "dictget" => EmitDictGet(args[0], args[1]),
+                "dictset" => EmitDictSet(args[0], args[1], args[2]),
+                "dictremove" => EmitDictRemove(args[0], args[1]),
+                "dictcount" => EmitDictCount(args[0]),
+                "dictcontainskey" => EmitDictContainsKey(args[0], args[1]),
+                "dictclear" => EmitDictClear(args[0]),
+
+                // HashSet operations (std::unordered_set)
+                "createhashset" => EmitCreateHashSet(),
+                "setadd" => EmitSetAdd(args[0], args[1]),
+                "setremove" => EmitSetRemove(args[0], args[1]),
+                "setcontains" => EmitSetContains(args[0], args[1]),
+                "setcount" => EmitSetCount(args[0]),
+                "setclear" => EmitSetClear(args[0]),
+
+                _ => null
+            };
+        }
+
+        // List operations using std::vector<std::any> or pointer wrapper
+        public string EmitCreateList() => "std::vector<std::any>()";
+        public string EmitListAdd(string list, string item) => $"{list}.push_back({item})";
+        public string EmitListGet(string list, string index) => $"{list}.at({index})";
+        public string EmitListSet(string list, string index, string value) => $"{list}[{index}] = {value}";
+        public string EmitListRemove(string list, string item) =>
+            $"([&]() {{ auto it = std::find({list}.begin(), {list}.end(), {item}); if (it != {list}.end()) {{ {list}.erase(it); return true; }} return false; }})()";
+        public string EmitListRemoveAt(string list, string index) => $"{list}.erase({list}.begin() + {index})";
+        public string EmitListCount(string list) => $"static_cast<int32_t>({list}.size())";
+        public string EmitListContains(string list, string item) =>
+            $"(std::find({list}.begin(), {list}.end(), {item}) != {list}.end())";
+        public string EmitListIndexOf(string list, string item) =>
+            $"static_cast<int32_t>(std::distance({list}.begin(), std::find({list}.begin(), {list}.end(), {item})))";
+        public string EmitListClear(string list) => $"{list}.clear()";
+        public string EmitListInsert(string list, string index, string item) => $"{list}.insert({list}.begin() + {index}, {item})";
+
+        // Dictionary operations using std::unordered_map
+        public string EmitCreateDictionary() => "std::unordered_map<std::any, std::any>()";
+        public string EmitDictAdd(string dict, string key, string value) => $"{dict}.insert({{ {key}, {value} }})";
+        public string EmitDictGet(string dict, string key) => $"{dict}.at({key})";
+        public string EmitDictSet(string dict, string key, string value) => $"{dict}[{key}] = {value}";
+        public string EmitDictRemove(string dict, string key) => $"({dict}.erase({key}) > 0)";
+        public string EmitDictCount(string dict) => $"static_cast<int32_t>({dict}.size())";
+        public string EmitDictContainsKey(string dict, string key) => $"({dict}.find({key}) != {dict}.end())";
+        public string EmitDictClear(string dict) => $"{dict}.clear()";
+
+        // HashSet operations using std::unordered_set
+        public string EmitCreateHashSet() => "std::unordered_set<std::any>()";
+        public string EmitSetAdd(string set, string item) => $"{set}.insert({item}).second";
+        public string EmitSetRemove(string set, string item) => $"({set}.erase({item}) > 0)";
+        public string EmitSetContains(string set, string item) => $"({set}.find({item}) != {set}.end())";
+        public string EmitSetCount(string set) => $"static_cast<int32_t>({set}.size())";
+        public string EmitSetClear(string set) => $"{set}.clear()";
 
         #endregion
     }

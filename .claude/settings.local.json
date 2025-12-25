@@ -32,7 +32,10 @@
       "Bash(timeout 60 dotnet run:*)",
       "Bash(ls:*)",
       "Bash(timeout 120 dotnet run:*)",
-      "Bash(dotnet test:*)"
+      "Bash(dotnet test:*)",
+      "Bash(npm update:*)",
+      "Bash(grep:*)",
+      "Bash(wc:*)"
     ]
   }
 }

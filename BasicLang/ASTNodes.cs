@@ -38,6 +38,7 @@ namespace BasicLang.Compiler.AST
         void Visit(ModuleNode node);
         void Visit(NamespaceNode node);
         void Visit(VariableDeclarationNode node);
+        void Visit(TupleDeconstructionNode node);
         void Visit(ConstantDeclarationNode node);
         void Visit(TypeDefineNode node);
         void Visit(ParameterNode node);
@@ -113,7 +114,72 @@ namespace BasicLang.Compiler.AST
     // ============================================================================
     // Type Definitions
     // ============================================================================
-    
+
+    /// <summary>
+    /// Generic type parameter constraint kinds
+    /// </summary>
+    public enum GenericConstraintKind
+    {
+        None,
+        Class,      // Reference type constraint (As Class)
+        Structure,  // Value type constraint (As Structure)
+        New,        // Constructor constraint (As New)
+        Type        // Specific type/interface constraint (As IComparable)
+    }
+
+    /// <summary>
+    /// Represents a constraint on a generic type parameter
+    /// </summary>
+    public class GenericConstraint
+    {
+        public GenericConstraintKind Kind { get; set; }
+        public string TypeName { get; set; }  // For Type constraints (interface/class name)
+
+        public GenericConstraint(GenericConstraintKind kind, string typeName = null)
+        {
+            Kind = kind;
+            TypeName = typeName;
+        }
+
+        public override string ToString()
+        {
+            return Kind switch
+            {
+                GenericConstraintKind.Class => "Class",
+                GenericConstraintKind.Structure => "Structure",
+                GenericConstraintKind.New => "New",
+                GenericConstraintKind.Type => TypeName ?? "?",
+                _ => ""
+            };
+        }
+    }
+
+    /// <summary>
+    /// Represents a generic type parameter with optional constraints
+    /// e.g., T As Class, U As IComparable
+    /// </summary>
+    public class GenericTypeParameter
+    {
+        public string Name { get; set; }
+        public List<GenericConstraint> Constraints { get; set; }
+
+        public GenericTypeParameter(string name)
+        {
+            Name = name;
+            Constraints = new List<GenericConstraint>();
+        }
+
+        public bool HasConstraint(GenericConstraintKind kind)
+            => Constraints.Any(c => c.Kind == kind);
+
+        public override string ToString()
+        {
+            if (Constraints.Count == 0)
+                return Name;
+            return $"{Name} As {string.Join(", ", Constraints)}";
+        }
+    }
+
     public class TypeReference
     {
         public string Name { get; set; }
@@ -237,6 +303,7 @@ namespace BasicLang.Compiler.AST
     {
         public string Name { get; set; }
         public List<string> GenericParameters { get; set; }
+        public List<GenericTypeParameter> GenericTypeParams { get; set; }  // With constraints
         public string BaseClass { get; set; }
         public List<string> Interfaces { get; set; }
         public List<ASTNode> Members { get; set; }
@@ -245,6 +312,7 @@ namespace BasicLang.Compiler.AST
         public ClassNode(int line, int column) : base(line, column)
         {
             GenericParameters = new List<string>();
+            GenericTypeParams = new List<GenericTypeParameter>();
             Interfaces = new List<string>();
             Members = new List<ASTNode>();
         }
@@ -389,12 +457,14 @@ namespace BasicLang.Compiler.AST
 
         // Generic parameters for generic subs: Sub Foo(Of T)(...)
         public List<string> GenericParameters { get; set; }
+        public List<GenericTypeParameter> GenericTypeParams { get; set; }  // With constraints
 
         public SubroutineNode(int line, int column) : base(line, column)
         {
             Access = AccessModifier.Public;
             Parameters = new List<ParameterNode>();
             GenericParameters = new List<string>();
+            GenericTypeParams = new List<GenericTypeParameter>();
         }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
@@ -424,12 +494,14 @@ namespace BasicLang.Compiler.AST
 
         // Generic parameters for generic functions: Function Foo(Of T)(...)
         public List<string> GenericParameters { get; set; }
+        public List<GenericTypeParameter> GenericTypeParams { get; set; }  // With constraints
 
         public FunctionNode(int line, int column) : base(line, column)
         {
             Access = AccessModifier.Public;
             Parameters = new List<ParameterNode>();
             GenericParameters = new List<string>();
+            GenericTypeParams = new List<GenericTypeParameter>();
         }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
@@ -782,7 +854,30 @@ namespace BasicLang.Compiler.AST
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
-    
+
+    /// <summary>
+    /// Tuple deconstruction statement: Dim (x, y) = GetPair()
+    /// </summary>
+    public class TupleDeconstructionNode : StatementNode
+    {
+        /// <summary>
+        /// The variables being declared and assigned from the tuple
+        /// </summary>
+        public List<(string Name, TypeReference Type)> Variables { get; set; }
+
+        /// <summary>
+        /// The expression that produces the tuple to deconstruct
+        /// </summary>
+        public ExpressionNode Initializer { get; set; }
+
+        public TupleDeconstructionNode(int line, int column) : base(line, column)
+        {
+            Variables = new List<(string, TypeReference)>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
     public class ConstantDeclarationNode : StatementNode
     {
         public string Name { get; set; }

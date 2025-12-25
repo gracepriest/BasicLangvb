@@ -41,35 +41,68 @@ namespace BasicLang.Compiler.LSP
 
             var locations = new List<Location>();
 
-            // Search through all tokens for references to this word
-            foreach (var token in state.Tokens)
-            {
-                if (token.Type == TokenType.Identifier &&
-                    string.Equals(token.Lexeme, word, StringComparison.OrdinalIgnoreCase))
-                {
-                    locations.Add(new Location
-                    {
-                        Uri = state.Uri,
-                        Range = new LspRange(
-                            new Position(token.Line - 1, token.Column - 1),
-                            new Position(token.Line - 1, token.Column - 1 + token.Lexeme.Length))
-                    });
-                }
-            }
+            // Check if this is a public symbol to determine search scope
+            bool isPublicSymbol = IsPublicSymbol(state, word);
 
-            // If includeDeclaration is true, also search for declarations
-            if (request.Context?.IncludeDeclaration == true && state.AST != null)
+            // Get all documents to search (all if public, otherwise just current)
+            var documentsToSearch = isPublicSymbol
+                ? _documentManager.GetAllDocuments()
+                : new[] { state };
+
+            // Search through all relevant documents for references
+            foreach (var docState in documentsToSearch)
             {
-                var declLocation = FindDeclarationLocation(state, word);
-                if (declLocation != null && !locations.Any(l =>
-                    l.Range.Start.Line == declLocation.Range.Start.Line &&
-                    l.Range.Start.Character == declLocation.Range.Start.Character))
+                if (docState?.Tokens == null) continue;
+
+                foreach (var token in docState.Tokens)
                 {
-                    locations.Insert(0, declLocation);
+                    if (token.Type == TokenType.Identifier &&
+                        string.Equals(token.Lexeme, word, StringComparison.OrdinalIgnoreCase))
+                    {
+                        locations.Add(new Location
+                        {
+                            Uri = docState.Uri,
+                            Range = new LspRange(
+                                new Position(token.Line - 1, token.Column - 1),
+                                new Position(token.Line - 1, token.Column - 1 + token.Lexeme.Length))
+                        });
+                    }
+                }
+
+                // If includeDeclaration is true, also search for declarations
+                if (request.Context?.IncludeDeclaration == true && docState.AST != null)
+                {
+                    var declLocation = FindDeclarationLocation(docState, word);
+                    if (declLocation != null && !locations.Any(l =>
+                        l.Uri == declLocation.Uri &&
+                        l.Range.Start.Line == declLocation.Range.Start.Line &&
+                        l.Range.Start.Character == declLocation.Range.Start.Character))
+                    {
+                        locations.Insert(0, declLocation);
+                    }
                 }
             }
 
             return Task.FromResult(new LocationContainer(locations));
+        }
+
+        private bool IsPublicSymbol(DocumentState state, string name)
+        {
+            if (state?.AST == null) return false;
+
+            foreach (var decl in state.AST.Declarations)
+            {
+                switch (decl)
+                {
+                    case ClassNode cls when cls.Name.Equals(name, StringComparison.OrdinalIgnoreCase):
+                        return true; // Classes are typically public/accessible
+                    case FunctionNode func when func.Name.Equals(name, StringComparison.OrdinalIgnoreCase):
+                        return func.Access == AccessModifier.Public;
+                    case SubroutineNode sub when sub.Name.Equals(name, StringComparison.OrdinalIgnoreCase):
+                        return sub.Access == AccessModifier.Public;
+                }
+            }
+            return false;
         }
 
         private Location FindDeclarationLocation(DocumentState state, string word)

@@ -15,7 +15,8 @@ namespace BasicLang.Compiler.StdLib
         Array,
         Conversion,
         DateTime,
-        System
+        System,
+        Collections
     }
 
     /// <summary>
@@ -176,5 +177,50 @@ namespace BasicLang.Compiler.StdLib
         string EmitDateAdd(string date, string interval, string number);
         string EmitDateDiff(string date1, string date2, string interval);
         string EmitFormatDate(string date, string format);
+    }
+
+    /// <summary>
+    /// Collections functions - List, Dictionary, HashSet operations
+    /// </summary>
+    public interface IStdCollections
+    {
+        // List operations
+        string EmitCreateList();
+        string EmitListAdd(string list, string item);
+        string EmitListGet(string list, string index);
+        string EmitListSet(string list, string index, string value);
+        string EmitListRemove(string list, string item);
+        string EmitListRemoveAt(string list, string index);
+        string EmitListCount(string list);
+        string EmitListContains(string list, string item);
+        string EmitListIndexOf(string list, string item);
+        string EmitListClear(string list);
+        string EmitListInsert(string list, string index, string item);
+        string EmitListToArray(string list);
+
+        // Dictionary operations
+        string EmitCreateDictionary();
+        string EmitDictAdd(string dict, string key, string value);
+        string EmitDictGet(string dict, string key);
+        string EmitDictSet(string dict, string key, string value);
+        string EmitDictRemove(string dict, string key);
+        string EmitDictCount(string dict);
+        string EmitDictContainsKey(string dict, string key);
+        string EmitDictContainsValue(string dict, string value);
+        string EmitDictKeys(string dict);
+        string EmitDictValues(string dict);
+        string EmitDictClear(string dict);
+
+        // HashSet operations
+        string EmitCreateHashSet();
+        string EmitSetAdd(string set, string item);
+        string EmitSetRemove(string set, string item);
+        string EmitSetContains(string set, string item);
+        string EmitSetCount(string set);
+        string EmitSetClear(string set);
+        string EmitSetUnion(string set1, string set2);
+        string EmitSetIntersect(string set1, string set2);
+        string EmitSetExcept(string set1, string set2);
+        string EmitSetToArray(string set);
     }
 }

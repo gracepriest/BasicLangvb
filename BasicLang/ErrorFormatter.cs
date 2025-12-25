@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using BasicLang.Compiler.SemanticAnalysis;
 
 namespace BasicLang.Compiler
 {
@@ -419,6 +420,386 @@ namespace BasicLang.Compiler
         public override string ToString()
         {
             return ErrorFormatter.FormatLexerError(ErrorCode, Message, Line, Column, SourceCode);
+        }
+    }
+
+    /// <summary>
+    /// Represents a quick fix suggestion for an error
+    /// </summary>
+    public class QuickFix
+    {
+        public string Description { get; set; }
+        public string Replacement { get; set; }
+        public int StartLine { get; set; }
+        public int StartColumn { get; set; }
+        public int EndLine { get; set; }
+        public int EndColumn { get; set; }
+
+        public QuickFix(string description, string replacement, int startLine, int startColumn, int endLine, int endColumn)
+        {
+            Description = description;
+            Replacement = replacement;
+            StartLine = startLine;
+            StartColumn = startColumn;
+            EndLine = endLine;
+            EndColumn = endColumn;
+        }
+
+        public override string ToString()
+        {
+            return $"  Quick fix: {Description}\n    Replace with: {Replacement}";
+        }
+    }
+
+    /// <summary>
+    /// Groups related errors together
+    /// </summary>
+    public class ErrorGroup
+    {
+        public SemanticError PrimaryError { get; set; }
+        public List<SemanticError> RelatedErrors { get; set; }
+        public string CommonCause { get; set; }
+
+        public ErrorGroup(SemanticError primaryError, string commonCause = null)
+        {
+            PrimaryError = primaryError;
+            RelatedErrors = new List<SemanticError>();
+            CommonCause = commonCause;
+        }
+
+        public void AddRelatedError(SemanticError error)
+        {
+            RelatedErrors.Add(error);
+        }
+
+        public override string ToString()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine(PrimaryError.ToString());
+
+            if (!string.IsNullOrEmpty(CommonCause))
+            {
+                sb.AppendLine($"  Common cause: {CommonCause}");
+            }
+
+            if (RelatedErrors.Count > 0)
+            {
+                sb.AppendLine($"  Related errors ({RelatedErrors.Count}):");
+                foreach (var error in RelatedErrors.Take(3))
+                {
+                    sb.AppendLine($"    - Line {error.Line}: {error.Message}");
+                }
+                if (RelatedErrors.Count > 3)
+                {
+                    sb.AppendLine($"    ... and {RelatedErrors.Count - 3} more");
+                }
+            }
+
+            return sb.ToString();
+        }
+    }
+
+    /// <summary>
+    /// Extended error formatting methods
+    /// </summary>
+    public static partial class ErrorFormatterExtensions
+    {
+        /// <summary>
+        /// Format an operator type error with available overloads
+        /// </summary>
+        public static string FormatOperatorError(string op, string leftType, string rightType,
+            int line, int column, string sourceCode = null, IEnumerable<string> availableOverloads = null)
+        {
+            var message = $"Operator '{op}' cannot be applied to operands of type '{leftType}' and '{rightType}'";
+            string suggestion = null;
+
+            if (availableOverloads != null && availableOverloads.Any())
+            {
+                suggestion = $"Available overloads for '{op}':\n  {string.Join("\n  ", availableOverloads)}";
+            }
+            else
+            {
+                suggestion = GetOperatorSuggestion(op, leftType, rightType);
+            }
+
+            return ErrorFormatter.FormatSemanticError(ErrorCode.BL3006_InvalidOperation, message, line, column,
+                sourceCode, suggestion);
+        }
+
+        /// <summary>
+        /// Format a member access error with similar member suggestions
+        /// </summary>
+        public static string FormatMemberAccessError(string typeName, string memberName,
+            int line, int column, string sourceCode = null, IEnumerable<string> similarMembers = null)
+        {
+            var message = $"'{typeName}' does not contain a definition for '{memberName}'";
+            string suggestion = null;
+
+            if (similarMembers != null && similarMembers.Any())
+            {
+                suggestion = $"Did you mean: {string.Join(", ", similarMembers.Take(3).Select(m => $"'{m}'"))}?";
+            }
+            else
+            {
+                suggestion = $"Check the spelling or ensure '{memberName}' is accessible";
+            }
+
+            return ErrorFormatter.FormatSemanticError(ErrorCode.BL3011_InvalidMemberAccess, message, line, column,
+                sourceCode, suggestion);
+        }
+
+        /// <summary>
+        /// Format an overload resolution error showing all candidates
+        /// </summary>
+        public static string FormatOverloadResolutionError(string functionName, IEnumerable<string> argTypes,
+            int line, int column, string sourceCode = null, IEnumerable<string> candidates = null)
+        {
+            var argTypesStr = string.Join(", ", argTypes);
+            var message = $"No overload of '{functionName}' matches argument types ({argTypesStr})";
+            string suggestion = null;
+
+            if (candidates != null && candidates.Any())
+            {
+                var sb = new StringBuilder("Available overloads:\n");
+                foreach (var candidate in candidates.Take(5))
+                {
+                    sb.AppendLine($"  {candidate}");
+                }
+                suggestion = sb.ToString().TrimEnd();
+            }
+
+            return ErrorFormatter.FormatSemanticError(ErrorCode.BL3004_WrongNumberOfArguments, message, line, column,
+                sourceCode, suggestion);
+        }
+
+        /// <summary>
+        /// Format a generic constraint error
+        /// </summary>
+        public static string FormatGenericConstraintError(string typeParam, string constraint, string actualType,
+            int line, int column, string sourceCode = null)
+        {
+            var message = $"Type argument '{actualType}' does not satisfy constraint '{constraint}' for type parameter '{typeParam}'";
+            string suggestion = $"Provide a type that implements or inherits from '{constraint}'";
+
+            return ErrorFormatter.FormatSemanticError(ErrorCode.BL3001_TypeMismatch, message, line, column,
+                sourceCode, suggestion);
+        }
+
+        /// <summary>
+        /// Create a quick fix for adding a missing type annotation
+        /// </summary>
+        public static QuickFix CreateAddTypeAnnotationFix(string variableName, string inferredType,
+            int line, int endColumn)
+        {
+            return new QuickFix(
+                $"Add type annotation 'As {inferredType}'",
+                $"{variableName} As {inferredType}",
+                line, 1, line, endColumn);
+        }
+
+        /// <summary>
+        /// Create a quick fix for type conversion
+        /// </summary>
+        public static QuickFix CreateTypeConversionFix(string expression, string fromType, string toType,
+            int line, int startColumn, int endColumn)
+        {
+            string conversionFunc = GetConversionFunction(toType);
+            return new QuickFix(
+                $"Convert to {toType}",
+                $"{conversionFunc}({expression})",
+                line, startColumn, line, endColumn);
+        }
+
+        /// <summary>
+        /// Create a quick fix for missing End block
+        /// </summary>
+        public static QuickFix CreateAddEndBlockFix(string blockType, int insertLine)
+        {
+            return new QuickFix(
+                $"Add 'End {blockType}'",
+                $"End {blockType}",
+                insertLine, 1, insertLine, 1);
+        }
+
+        private static string GetOperatorSuggestion(string op, string leftType, string rightType)
+        {
+            // String concatenation
+            if (op == "+" && (leftType == "String" || rightType == "String"))
+            {
+                return "Use '&' for string concatenation, or convert both operands to the same type";
+            }
+
+            // Numeric operations
+            if (op == "/" && leftType == "Integer" && rightType == "Integer")
+            {
+                return "Integer division uses '\\'. For decimal result, convert to Double first";
+            }
+
+            // Boolean operations
+            if ((op == "And" || op == "Or") && (leftType != "Boolean" || rightType != "Boolean"))
+            {
+                return "Logical operators require Boolean operands. Use CBool() to convert";
+            }
+
+            return null;
+        }
+
+        private static string GetConversionFunction(string targetType)
+        {
+            return targetType switch
+            {
+                "Integer" => "CInt",
+                "Long" => "CLng",
+                "Single" => "CSng",
+                "Double" => "CDbl",
+                "String" => "CStr",
+                "Boolean" => "CBool",
+                "Char" => "CChar",
+                _ => $"CType(..., {targetType})"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Context tracker for expression evaluation errors
+    /// </summary>
+    public class ErrorContext
+    {
+        private readonly Stack<string> _contextStack;
+        private readonly HashSet<string> _poisonedSymbols;
+
+        public ErrorContext()
+        {
+            _contextStack = new Stack<string>();
+            _poisonedSymbols = new HashSet<string>();
+        }
+
+        public void PushContext(string context)
+        {
+            _contextStack.Push(context);
+        }
+
+        public void PopContext()
+        {
+            if (_contextStack.Count > 0)
+            {
+                _contextStack.Pop();
+            }
+        }
+
+        public string GetCurrentContext()
+        {
+            if (_contextStack.Count == 0) return null;
+            return string.Join(" -> ", _contextStack.Reverse());
+        }
+
+        public void PoisonSymbol(string symbolName)
+        {
+            _poisonedSymbols.Add(symbolName);
+        }
+
+        public bool IsSymbolPoisoned(string symbolName)
+        {
+            return _poisonedSymbols.Contains(symbolName);
+        }
+
+        public void ClearPoisonedSymbols()
+        {
+            _poisonedSymbols.Clear();
+        }
+
+        public string FormatErrorWithContext(string message)
+        {
+            var context = GetCurrentContext();
+            if (string.IsNullOrEmpty(context))
+                return message;
+            return $"{message}\n  while evaluating: {context}";
+        }
+    }
+
+    /// <summary>
+    /// Groups errors by likely common cause
+    /// </summary>
+    public static class ErrorGrouper
+    {
+        public static List<ErrorGroup> GroupErrors(IEnumerable<SemanticError> errors)
+        {
+            var groups = new List<ErrorGroup>();
+            var processed = new HashSet<SemanticError>();
+
+            foreach (var error in errors)
+            {
+                if (processed.Contains(error)) continue;
+
+                var group = new ErrorGroup(error);
+                processed.Add(error);
+
+                // Find related errors (same symbol, same line, cascading from undefined)
+                foreach (var other in errors)
+                {
+                    if (processed.Contains(other)) continue;
+
+                    if (AreErrorsRelated(error, other))
+                    {
+                        group.AddRelatedError(other);
+                        processed.Add(other);
+                    }
+                }
+
+                // Determine common cause
+                group.CommonCause = DetermineCommonCause(group);
+                groups.Add(group);
+            }
+
+            return groups;
+        }
+
+        private static bool AreErrorsRelated(SemanticError a, SemanticError b)
+        {
+            // Same line errors are often related
+            if (a.Line == b.Line && Math.Abs(a.Column - b.Column) < 20)
+                return true;
+
+            // Undefined symbol followed by type errors on same symbol
+            if (a.Message.Contains("Undefined") && b.Message.Contains("type"))
+            {
+                // Extract symbol names and compare
+                var symbolA = ExtractSymbolName(a.Message);
+                var symbolB = ExtractSymbolName(b.Message);
+                if (!string.IsNullOrEmpty(symbolA) && symbolA == symbolB)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static string ExtractSymbolName(string message)
+        {
+            // Extract symbol name from quotes in error message
+            var match = System.Text.RegularExpressions.Regex.Match(message, @"'([^']+)'");
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        private static string DetermineCommonCause(ErrorGroup group)
+        {
+            var primary = group.PrimaryError.Message;
+
+            if (primary.Contains("Undefined symbol") || primary.Contains("Undefined identifier"))
+            {
+                var symbol = ExtractSymbolName(primary);
+                if (group.RelatedErrors.Count > 0)
+                {
+                    return $"Symbol '{symbol}' is undefined, causing {group.RelatedErrors.Count} cascading error(s)";
+                }
+            }
+
+            if (primary.Contains("Unknown type"))
+            {
+                var typeName = ExtractSymbolName(primary);
+                return $"Type '{typeName}' is not defined. Check spelling or add an import";
+            }
+
+            return null;
         }
     }
 }
