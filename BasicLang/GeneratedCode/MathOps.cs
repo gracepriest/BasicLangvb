@@ -15,14 +15,14 @@ namespace GeneratedCode
 
             x = -5.5;
             y = 2;
-            Console.WriteLine(Math.Abs(x));
+            Console.WriteLine(Math.Abs(-5.5));
             Console.WriteLine(Math.Sqrt(16));
             Console.WriteLine(Math.Pow(2, 8));
             Console.WriteLine(Math.Floor(3.7));
             Console.WriteLine(Math.Ceiling(3.2));
             Console.WriteLine(Math.Round(3.5));
-            Console.WriteLine(Math.Min(x, y));
-            Console.WriteLine(Math.Max(x, y));
+            Console.WriteLine(Math.Min(-5.5, 2));
+            Console.WriteLine(Math.Max(-5.5, 2));
             Console.WriteLine(Math.Sin(0));
             Console.WriteLine(Math.Cos(0));
             Console.WriteLine(Math.Log(2.718281828));

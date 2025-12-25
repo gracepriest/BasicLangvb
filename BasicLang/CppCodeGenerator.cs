@@ -40,10 +40,65 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             _valueNames.Clear();
             _allTemporaries.Clear();
             _tempCounter = 0;
-            
+
             // Generate header
             GenerateHeader(module);
-            
+
+            // Generate forward declarations for classes
+            if (module.Classes.Count > 0)
+            {
+                WriteLine("// Forward declarations");
+                foreach (var irClass in module.Classes.Values)
+                {
+                    WriteLine($"class {SanitizeName(irClass.Name)};");
+                }
+                WriteLine();
+            }
+
+            // Generate enums
+            if (module.Enums.Count > 0)
+            {
+                WriteLine("// Enums");
+                foreach (var irEnum in module.Enums.Values)
+                {
+                    GenerateEnum(irEnum);
+                    WriteLine();
+                }
+            }
+
+            // Generate delegate types (using std::function)
+            if (module.Delegates.Count > 0)
+            {
+                WriteLine("// Delegate types");
+                foreach (var irDelegate in module.Delegates.Values)
+                {
+                    GenerateDelegate(irDelegate);
+                }
+                WriteLine();
+            }
+
+            // Generate interfaces (abstract classes)
+            if (module.Interfaces.Count > 0)
+            {
+                WriteLine("// Interfaces (abstract classes)");
+                foreach (var irInterface in module.Interfaces.Values)
+                {
+                    GenerateInterface(irInterface);
+                    WriteLine();
+                }
+            }
+
+            // Generate classes
+            if (module.Classes.Count > 0)
+            {
+                WriteLine("// Classes");
+                foreach (var irClass in module.Classes.Values)
+                {
+                    GenerateClass(irClass);
+                    WriteLine();
+                }
+            }
+
             // Generate global variables
             if (module.GlobalVariables.Count > 0)
             {
@@ -56,36 +111,52 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }
                 WriteLine();
             }
-            
+
+            // Get standalone functions (not class methods)
+            var standaloneFunctions = module.Functions
+                .Where(f => !f.IsExternal && !IsClassMethod(f, module))
+                .ToList();
+
             // Generate function declarations
-            WriteLine("// Function declarations");
-            foreach (var function in module.Functions)
+            if (standaloneFunctions.Count > 0)
             {
-                if (!function.IsExternal)
+                WriteLine("// Function declarations");
+                foreach (var function in standaloneFunctions)
                 {
                     GenerateFunctionDeclaration(function);
                 }
-            }
-            WriteLine();
-            
-            // Generate function implementations
-            WriteLine("// Function implementations");
-            foreach (var function in module.Functions)
-            {
-                if (!function.IsExternal)
+                WriteLine();
+
+                // Generate function implementations
+                WriteLine("// Function implementations");
+                foreach (var function in standaloneFunctions)
                 {
                     GenerateFunction(function);
                     WriteLine();
                 }
             }
-            
+
             // Generate main function if requested
             if (_options.GenerateMainFunction)
             {
                 GenerateMainFunction(module);
             }
-            
+
             return _output.ToString();
+        }
+
+        private bool IsClassMethod(IRFunction function, IRModule module)
+        {
+            foreach (var irClass in module.Classes.Values)
+            {
+                if (irClass.Methods.Any(m => m.Implementation == function))
+                    return true;
+                if (irClass.Constructors.Any(c => c.Implementation == function))
+                    return true;
+                if (irClass.Properties.Any(p => p.Getter == function || p.Setter == function))
+                    return true;
+            }
+            return false;
         }
         
         private void GenerateHeader(IRModule module)
@@ -93,7 +164,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("#pragma once");
 
             // Collect unique includes
-            var includes = new HashSet<string> { "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib", "ctime" };
+            var includes = new HashSet<string> { "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib", "ctime", "functional" };
             foreach (var inc in _headerIncludes)
             {
                 includes.Add(inc);
@@ -108,7 +179,467 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("using namespace std;");
             WriteLine();
         }
-        
+
+        private void GenerateEnum(IREnum irEnum)
+        {
+            var enumName = SanitizeName(irEnum.Name);
+
+            // Use C++11 enum class for type safety
+            var underlyingType = "";
+            if (irEnum.UnderlyingType != null && irEnum.UnderlyingType.Name != "Int32")
+            {
+                underlyingType = " : " + MapType(irEnum.UnderlyingType);
+            }
+
+            WriteLine($"enum class {enumName}{underlyingType}");
+            WriteLine("{");
+            Indent();
+
+            for (int i = 0; i < irEnum.Members.Count; i++)
+            {
+                var member = irEnum.Members[i];
+                var comma = i < irEnum.Members.Count - 1 ? "," : "";
+                var value = member.Value != null ? $" = {member.Value}" : "";
+                WriteLine($"{SanitizeName(member.Name)}{value}{comma}");
+            }
+
+            Unindent();
+            WriteLine("};");
+        }
+
+        private void GenerateDelegate(IRDelegate irDelegate)
+        {
+            var delegateName = SanitizeName(irDelegate.Name);
+            var returnType = MapType(irDelegate.ReturnType);
+            var paramTypes = string.Join(", ", irDelegate.Parameters.Select(p => MapTypeName(p.TypeName)));
+
+            // Use std::function for delegate types
+            WriteLine($"using {delegateName} = std::function<{returnType}({paramTypes})>;");
+        }
+
+        private string MapTypeName(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "void*";
+            return typeName.ToLowerInvariant() switch
+            {
+                "integer" => "int32_t",
+                "long" => "int64_t",
+                "single" => "float",
+                "double" => "double",
+                "string" => "std::string",
+                "boolean" => "bool",
+                "byte" => "uint8_t",
+                "short" => "int16_t",
+                "object" => "void*",
+                "void" => "void",
+                _ => SanitizeName(typeName)
+            };
+        }
+
+        private void GenerateInterface(IRInterface irInterface)
+        {
+            var interfaceName = SanitizeName(irInterface.Name);
+
+            // Interfaces become abstract classes in C++
+            var baseList = "";
+            if (irInterface.BaseInterfaces.Count > 0)
+            {
+                baseList = " : " + string.Join(", ", irInterface.BaseInterfaces.Select(b => $"public {SanitizeName(b)}"));
+            }
+
+            WriteLine($"class {interfaceName}{baseList}");
+            WriteLine("{");
+            WriteLine("public:");
+            Indent();
+
+            // Virtual destructor for proper cleanup
+            WriteLine($"virtual ~{interfaceName}() = default;");
+            WriteLine();
+
+            // Generate pure virtual method declarations
+            foreach (var method in irInterface.Methods)
+            {
+                var returnType = MapType(method.ReturnType);
+                var methodName = SanitizeName(method.Name);
+                var paramList = string.Join(", ", method.Parameters.Select(p =>
+                    $"{MapTypeName(p.TypeName)} {SanitizeName(p.Name)}"));
+
+                WriteLine($"virtual {returnType} {methodName}({paramList}) = 0;");
+            }
+
+            // Generate property getter/setter declarations
+            foreach (var prop in irInterface.Properties)
+            {
+                var propType = MapType(prop.Type);
+                var propName = SanitizeName(prop.Name);
+                if (prop.HasGetter)
+                    WriteLine($"virtual {propType} get_{propName}() = 0;");
+                if (prop.HasSetter)
+                    WriteLine($"virtual void set_{propName}({propType} value) = 0;");
+            }
+
+            Unindent();
+            WriteLine("};");
+        }
+
+        private void GenerateClass(IRClass irClass)
+        {
+            var className = SanitizeName(irClass.Name);
+
+            // Build inheritance list
+            var baseList = new List<string>();
+            if (!string.IsNullOrEmpty(irClass.BaseClass))
+            {
+                baseList.Add($"public {SanitizeName(irClass.BaseClass)}");
+            }
+            foreach (var iface in irClass.Interfaces)
+            {
+                baseList.Add($"public {SanitizeName(iface)}");
+            }
+
+            var inheritance = baseList.Count > 0 ? " : " + string.Join(", ", baseList) : "";
+
+            WriteLine($"class {className}{inheritance}");
+            WriteLine("{");
+
+            // Private members
+            var privateFields = irClass.Fields.Where(f => f.Access == AccessModifier.Private).ToList();
+            if (privateFields.Count > 0)
+            {
+                WriteLine("private:");
+                Indent();
+                foreach (var field in privateFields)
+                {
+                    var staticMod = field.IsStatic ? "static " : "";
+                    var type = MapType(field.Type);
+                    var name = SanitizeName(field.Name);
+                    WriteLine($"{staticMod}{type} {name};");
+                }
+                Unindent();
+                WriteLine();
+            }
+
+            // Protected members
+            var protectedFields = irClass.Fields.Where(f => f.Access == AccessModifier.Protected).ToList();
+            if (protectedFields.Count > 0)
+            {
+                WriteLine("protected:");
+                Indent();
+                foreach (var field in protectedFields)
+                {
+                    var staticMod = field.IsStatic ? "static " : "";
+                    var type = MapType(field.Type);
+                    var name = SanitizeName(field.Name);
+                    WriteLine($"{staticMod}{type} {name};");
+                }
+                Unindent();
+                WriteLine();
+            }
+
+            // Public members
+            WriteLine("public:");
+            Indent();
+
+            // Public fields
+            var publicFields = irClass.Fields.Where(f => f.Access == AccessModifier.Public).ToList();
+            foreach (var field in publicFields)
+            {
+                var staticMod = field.IsStatic ? "static " : "";
+                var type = MapType(field.Type);
+                var name = SanitizeName(field.Name);
+                WriteLine($"{staticMod}{type} {name};");
+            }
+
+            if (publicFields.Count > 0)
+                WriteLine();
+
+            // Constructors
+            foreach (var ctor in irClass.Constructors)
+            {
+                GenerateConstructor(irClass, ctor);
+            }
+
+            // Default destructor
+            if (!string.IsNullOrEmpty(irClass.BaseClass) || irClass.Interfaces.Count > 0)
+            {
+                WriteLine($"virtual ~{className}() = default;");
+                WriteLine();
+            }
+
+            // Properties (as getter/setter methods)
+            foreach (var prop in irClass.Properties)
+            {
+                GenerateProperty(irClass, prop);
+            }
+
+            // Events
+            foreach (var evt in irClass.Events)
+            {
+                GenerateEvent(evt);
+            }
+
+            // Methods
+            foreach (var method in irClass.Methods)
+            {
+                GenerateMethod(irClass, method);
+            }
+
+            Unindent();
+            WriteLine("};");
+        }
+
+        private void GenerateConstructor(IRClass irClass, IRConstructor ctor)
+        {
+            var className = SanitizeName(irClass.Name);
+
+            // Generate parameter list from implementation
+            var paramList = "";
+            if (ctor.Implementation != null)
+            {
+                paramList = string.Join(", ", ctor.Implementation.Parameters.Select(p =>
+                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+            }
+
+            // Base constructor call (initializer list)
+            var initList = "";
+            if (!string.IsNullOrEmpty(irClass.BaseClass) && ctor.BaseConstructorArgs.Count > 0)
+            {
+                var baseArgs = string.Join(", ", ctor.BaseConstructorArgs.Select(a =>
+                    a is IRConstant c ? EmitConstant(c) : SanitizeName(a.Name)));
+                initList = $" : {SanitizeName(irClass.BaseClass)}({baseArgs})";
+            }
+
+            WriteLine($"{className}({paramList}){initList}");
+            WriteLine("{");
+            Indent();
+
+            // Generate body from implementation
+            if (ctor.Implementation != null)
+            {
+                _currentFunction = ctor.Implementation;
+                InitializeFunctionContext(ctor.Implementation);
+                DeclareLocalsAndTemporaries(ctor.Implementation);
+
+                if (ctor.Implementation.EntryBlock != null)
+                    GenerateBlock(ctor.Implementation.EntryBlock, new HashSet<BasicBlock>());
+
+                _currentFunction = null;
+            }
+
+            Unindent();
+            WriteLine("}");
+            WriteLine();
+        }
+
+        private void GenerateProperty(IRClass irClass, IRProperty prop)
+        {
+            var propType = MapType(prop.Type);
+            var propName = SanitizeName(prop.Name);
+            var staticMod = prop.IsStatic ? "static " : "";
+
+            // Getter
+            if (prop.Getter != null && !prop.IsWriteOnly)
+            {
+                WriteLine($"{staticMod}{propType} get_{propName}()");
+                WriteLine("{");
+                Indent();
+
+                _currentFunction = prop.Getter;
+                InitializeFunctionContext(prop.Getter);
+                DeclareLocalsAndTemporaries(prop.Getter);
+
+                if (prop.Getter.EntryBlock != null)
+                    GenerateBlock(prop.Getter.EntryBlock, new HashSet<BasicBlock>());
+
+                _currentFunction = null;
+                Unindent();
+                WriteLine("}");
+                WriteLine();
+            }
+
+            // Setter
+            if (prop.Setter != null && !prop.IsReadOnly)
+            {
+                WriteLine($"{staticMod}void set_{propName}({propType} value)");
+                WriteLine("{");
+                Indent();
+
+                _currentFunction = prop.Setter;
+                InitializeFunctionContext(prop.Setter);
+                DeclareLocalsAndTemporaries(prop.Setter);
+
+                if (prop.Setter.EntryBlock != null)
+                    GenerateBlock(prop.Setter.EntryBlock, new HashSet<BasicBlock>());
+
+                _currentFunction = null;
+                Unindent();
+                WriteLine("}");
+                WriteLine();
+            }
+        }
+
+        private void GenerateEvent(IREvent evt)
+        {
+            var delegateType = SanitizeName(evt.DelegateType);
+            var eventName = SanitizeName(evt.Name);
+            var staticMod = evt.IsStatic ? "static " : "";
+
+            // Events in C++ are typically implemented as vectors of callbacks
+            WriteLine($"{staticMod}std::vector<{delegateType}> {eventName}_handlers;");
+            WriteLine();
+
+            // Add handler method
+            WriteLine($"{staticMod}void add_{eventName}({delegateType} handler)");
+            WriteLine("{");
+            Indent();
+            WriteLine($"{eventName}_handlers.push_back(handler);");
+            Unindent();
+            WriteLine("}");
+            WriteLine();
+
+            // Remove handler method (simplified - removes last matching)
+            WriteLine($"{staticMod}void remove_{eventName}({delegateType} handler)");
+            WriteLine("{");
+            Indent();
+            WriteLine($"// Note: Simplified removal - C++ function comparison is complex");
+            WriteLine($"if (!{eventName}_handlers.empty()) {eventName}_handlers.pop_back();");
+            Unindent();
+            WriteLine("}");
+            WriteLine();
+
+            // Raise event method
+            var paramList = "";
+            // For simplicity, events with no params
+            WriteLine($"{staticMod}void raise_{eventName}()");
+            WriteLine("{");
+            Indent();
+            WriteLine($"for (auto& handler : {eventName}_handlers) {{ handler(); }}");
+            Unindent();
+            WriteLine("}");
+            WriteLine();
+        }
+
+        private void GenerateMethod(IRClass irClass, IRMethod method)
+        {
+            var returnType = MapType(method.ReturnType);
+            var methodName = SanitizeName(method.Name);
+            var staticMod = method.IsStatic ? "static " : "";
+            var virtualMod = method.IsVirtual && !method.IsOverride ? "virtual " : "";
+            var overrideMod = method.IsOverride ? " override" : "";
+
+            // Generate parameter list
+            var paramList = "";
+            if (method.Implementation != null)
+            {
+                paramList = string.Join(", ", method.Implementation.Parameters.Select(p =>
+                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+            }
+
+            WriteLine($"{virtualMod}{staticMod}{returnType} {methodName}({paramList}){overrideMod}");
+            WriteLine("{");
+            Indent();
+
+            // Generate body
+            if (method.Implementation != null)
+            {
+                _currentFunction = method.Implementation;
+                InitializeFunctionContext(method.Implementation);
+                DeclareLocalsAndTemporaries(method.Implementation);
+
+                if (method.Implementation.EntryBlock != null)
+                    GenerateBlock(method.Implementation.EntryBlock, new HashSet<BasicBlock>());
+
+                _currentFunction = null;
+            }
+
+            Unindent();
+            WriteLine("}");
+            WriteLine();
+        }
+
+        private void InitializeFunctionContext(IRFunction function)
+        {
+            _valueNames.Clear();
+            _declaredIdentifiers.Clear();
+            _allTemporaries.Clear();
+            _tempCounter = 0;
+
+            // Track declared identifiers
+            foreach (var param in function.Parameters)
+                _declaredIdentifiers.Add(param.Name);
+
+            foreach (var local in function.LocalVariables)
+                _declaredIdentifiers.Add(local.Name);
+
+            if (_module != null)
+            {
+                foreach (var g in _module.GlobalVariables.Values)
+                    _declaredIdentifiers.Add(g.Name);
+            }
+
+            // Collect temporaries (values that aren't named destinations)
+            foreach (var block in function.Blocks)
+            {
+                foreach (var instruction in block.Instructions)
+                {
+                    if (instruction is IRValue value && !(value is IRConstant))
+                    {
+                        if (!IsNamedDestination(value))
+                        {
+                            _allTemporaries.Add(value);
+                        }
+                    }
+                }
+            }
+        }
+
+        private void DeclareLocalsAndTemporaries(IRFunction function)
+        {
+            // Declare local variables
+            foreach (var local in function.LocalVariables)
+            {
+                var localType = MapType(local.Type);
+                var localName = SanitizeName(local.Name);
+                if (localType != "void")
+                {
+                    var defaultVal = GetDefaultValue(local.Type);
+                    WriteLine($"{localType} {localName} = {defaultVal};");
+                }
+            }
+
+            // Declare temporaries with proper typing (skip void types)
+            var tempsByType = _allTemporaries
+                .Where(t => t.Type?.Name != "Void" && MapType(t.Type) != "void")
+                .GroupBy(t => MapType(t.Type))
+                .ToList();
+
+            foreach (var group in tempsByType)
+            {
+                var cppType = group.Key;
+                var tempNames = group.Select(GetValueName).Distinct().ToList();
+
+                foreach (var tempName in tempNames)
+                {
+                    WriteLine($"{cppType} {tempName} = {{}};");
+                }
+            }
+
+            if (function.LocalVariables.Count > 0 || _allTemporaries.Count > 0)
+                WriteLine();
+        }
+
+        private string MapAccessModifier(AccessModifier access)
+        {
+            return access switch
+            {
+                AccessModifier.Public => "public",
+                AccessModifier.Private => "private",
+                AccessModifier.Protected => "protected",
+                AccessModifier.Friend => "public",  // C++ doesn't have internal
+                _ => "private"
+            };
+        }
+
         private void GenerateFunctionDeclaration(IRFunction function)
         {
             var returnType = MapType(function.ReturnType);
@@ -123,85 +654,26 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private void GenerateFunction(IRFunction function)
         {
             _currentFunction = function;
-            _allTemporaries.Clear();
-            _valueNames.Clear();
-            _declaredIdentifiers.Clear();
-            _tempCounter = 0;
+            InitializeFunctionContext(function);
 
-            // Collect declared identifiers (parameters and locals)
-            foreach (var param in function.Parameters)
-                _declaredIdentifiers.Add(param.Name);
-
-            foreach (var local in function.LocalVariables)
-                _declaredIdentifiers.Add(local.Name);
-
-            // Collect temporaries (values that aren't named destinations)
-            foreach (var block in function.Blocks)
-            {
-                foreach (var instruction in block.Instructions)
-                {
-                    if (instruction is IRValue value && !(value is IRConstant))
-                    {
-                        // Skip values that are named destinations (they'll be emitted directly)
-                        if (!IsNamedDestination(value))
-                        {
-                            _allTemporaries.Add(value);
-                        }
-                    }
-                }
-            }
-            
             // Generate signature
             var returnType = MapType(function.ReturnType);
             var functionName = SanitizeName(function.Name);
             var parameters = string.Join(", ",
                 function.Parameters.Select(p => $"{MapType(p.Type)} {GetValueName(p)}"));
-            
+
             WriteLine($"{returnType} {functionName}({parameters})");
             WriteLine("{");
             Indent();
 
-            // Declare local variables
-            foreach (var local in function.LocalVariables)
-            {
-                var localType = MapType(local.Type);
-                var localName = SanitizeName(local.Name);
-                if (localType != "void")
-                {
-                    var defaultVal = GetDefaultValue(local.Type);
-                    WriteLine($"{localType} {localName} = {defaultVal};");
-                }
-            }
+            DeclareLocalsAndTemporaries(function);
 
-            if (function.LocalVariables.Count > 0)
-                WriteLine();
-
-            // Declare temporaries with proper typing (skip void types)
-            var tempsByType = _allTemporaries
-                .Where(t => t.Type?.Name != "Void" && MapType(t.Type) != "void")
-                .GroupBy(t => MapType(t.Type))
-                .ToList();
-
-            foreach (var group in tempsByType)
-            {
-                var cppType = group.Key;
-                var tempNames = group.Select(GetValueName).Distinct();
-
-                foreach (var tempName in tempNames)
-                {
-                    WriteLine($"{cppType} {tempName} = {{}};");
-                }
-            }
-
-            if (_allTemporaries.Count > 0)
-                WriteLine();
-            
             // Generate body
             if (function.EntryBlock != null)
             {
                 GenerateBlock(function.EntryBlock, new HashSet<BasicBlock>());
             }
-            
+
             Unindent();
             WriteLine("}");
         }
@@ -736,7 +1208,49 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 _ => "{}"
             };
         }
-        
+
+        private string EmitConstant(IRConstant constant)
+        {
+            if (constant.Value == null)
+                return "nullptr";
+
+            if (constant.Value is string str)
+                return $"\"{EscapeString(str)}\"";
+
+            if (constant.Value is char ch)
+                return $"'{EscapeChar(ch)}'";
+
+            if (constant.Value is bool b)
+                return b ? "true" : "false";
+
+            if (constant.Value is float f)
+                return $"{f}f";
+
+            if (constant.Value is long l)
+                return $"{l}LL";
+
+            return constant.Value.ToString();
+        }
+
+        private string EscapeString(string str)
+        {
+            return str.Replace("\\", "\\\\")
+                     .Replace("\"", "\\\"")
+                     .Replace("\n", "\\n")
+                     .Replace("\r", "\\r")
+                     .Replace("\t", "\\t");
+        }
+
+        private string EscapeChar(char ch)
+        {
+            if (ch == '\'') return "\\'";
+            if (ch == '\\') return "\\\\";
+            if (ch == '\n') return "\\n";
+            if (ch == '\r') return "\\r";
+            if (ch == '\t') return "\\t";
+            return ch.ToString();
+        }
+
         private void Write(string text) => _output.Append(text);
         
         private void WriteLine(string text = "")

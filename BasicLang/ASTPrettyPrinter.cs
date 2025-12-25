@@ -452,6 +452,11 @@ namespace BasicLang.Compiler
             Unindent();
         }
 
+        public void Visit(ImplicitWithMemberNode node)
+        {
+            WriteLine($"ImplicitWithMember: .{node.MemberName}");
+        }
+
         public void Visit(TryStatementNode node)
         {
             WriteLine("Try:");
@@ -1005,6 +1010,46 @@ namespace BasicLang.Compiler
                 node.Value?.Accept(this);
                 Unindent();
             }
+        }
+
+        public void Visit(LinqQueryExpressionNode node)
+        {
+            WriteLine("LINQ Query:");
+            Indent();
+            foreach (var clause in node.Clauses)
+            {
+                switch (clause)
+                {
+                    case FromClause from:
+                        WriteLine($"From {from.VariableName} In");
+                        Indent();
+                        from.Collection?.Accept(this);
+                        Unindent();
+                        break;
+                    case WhereClause where:
+                        WriteLine("Where");
+                        Indent();
+                        where.Condition?.Accept(this);
+                        Unindent();
+                        break;
+                    case SelectClause select:
+                        WriteLine("Select");
+                        Indent();
+                        select.Selector?.Accept(this);
+                        Unindent();
+                        break;
+                    case OrderByClause orderBy:
+                        WriteLine($"Order By {(orderBy.Descending ? "Descending" : "Ascending")}");
+                        Indent();
+                        orderBy.KeySelector?.Accept(this);
+                        Unindent();
+                        break;
+                    default:
+                        WriteLine(clause.GetType().Name);
+                        break;
+                }
+            }
+            Unindent();
         }
     }
 }

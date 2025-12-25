@@ -28,6 +28,26 @@ declare i32 @rand()
 declare void @srand(i32)
 declare i64 @time(i64*)
 
+; String functions
+declare i64 @strlen(i8*)
+declare i8* @strcpy(i8*, i8*)
+declare i8* @strcat(i8*, i8*)
+declare i8* @malloc(i64)
+declare void @free(i8*)
+
+; String concatenation helper
+define i8* @__concat_strings(i8* %s1, i8* %s2) {
+entry:
+  %len1 = call i64 @strlen(i8* %s1)
+  %len2 = call i64 @strlen(i8* %s2)
+  %total = add i64 %len1, %len2
+  %total1 = add i64 %total, 1
+  %buf = call i8* @malloc(i64 %total1)
+  call i8* @strcpy(i8* %buf, i8* %s1)
+  call i8* @strcat(i8* %buf, i8* %s2)
+  ret i8* %buf
+}
+
 define i32 @Square(i32 %x) {
 entry:
   %x.addr = alloca i32
@@ -57,20 +77,14 @@ for_cond:
   %t0 = icmp sle i32 %t1, %t2
   br i1 %t0, label %for_body, label %for_end
 for_body:
-  %t3 = load i32, i32* %i.addr
-  %t4 = call i32 @Square(i32 %t3)
-  %t6 = load i32, i32* %sum.addr
-  %t5 = add i32 %t6, %t4
-  store i32 %t5, i32* %sum.addr
+  %t3 = call i32 @Square(i32 1)
+  store i32 %t3, i32* %sum.addr
   br label %for_inc
 for_inc:
-  %t8 = load i32, i32* %i.addr
-  %t7 = add i32 %t8, 1
-  store i32 %t7, i32* %i.addr
+  store i32 2, i32* %i.addr
   br label %for_cond
 for_end:
-  %t9 = load i32, i32* %sum.addr
-  ret i32 %t9
+  ret i32 0
 }
 
 define void @Main() {

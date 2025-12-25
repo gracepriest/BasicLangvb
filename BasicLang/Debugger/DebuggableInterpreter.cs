@@ -13,7 +13,7 @@ namespace BasicLang.Debugger
     public class DebuggableInterpreter
     {
         private readonly IRModule _module;
-        private readonly Dictionary<string, HashSet<int>> _breakpoints = new();
+        private readonly BreakpointManager _breakpointManager = new();
         private readonly Dictionary<string, object> _globalVariables = new();
         private readonly Stack<CallFrame> _callStack = new();
         private readonly Random _random = new();
@@ -24,12 +24,14 @@ namespace BasicLang.Debugger
         private int _stepDepth;
         private bool _stopRequested;
         private int _currentLine;
+        private string _currentFile;
         private readonly object _syncLock = new();
         private readonly ManualResetEventSlim _pauseEvent = new(true);
 
         public event EventHandler<DebugEventArgs> BreakpointHit;
         public event EventHandler<DebugEventArgs> StepComplete;
         public event EventHandler<OutputEventArgs> OutputProduced;
+        public event EventHandler<LogpointEventArgs> LogpointHit;
 
         private enum StepMode
         {
@@ -44,22 +46,73 @@ namespace BasicLang.Debugger
             _module = module;
         }
 
+        /// <summary>
+        /// Set the current source file path for debugging
+        /// </summary>
+        public void SetCurrentFile(string filePath)
+        {
+            _currentFile = filePath;
+        }
+
+        /// <summary>
+        /// Add a breakpoint
+        /// </summary>
+        public Breakpoint AddBreakpoint(Breakpoint breakpoint)
+        {
+            lock (_syncLock)
+            {
+                return _breakpointManager.AddBreakpoint(breakpoint);
+            }
+        }
+
+        /// <summary>
+        /// Remove a breakpoint by ID
+        /// </summary>
+        public bool RemoveBreakpoint(int id)
+        {
+            lock (_syncLock)
+            {
+                return _breakpointManager.RemoveBreakpoint(id);
+            }
+        }
+
+        /// <summary>
+        /// Legacy method for compatibility
+        /// </summary>
         public void SetBreakpoint(string file, int line)
         {
             lock (_syncLock)
             {
-                if (!_breakpoints.ContainsKey(file))
-                    _breakpoints[file] = new HashSet<int>();
-                _breakpoints[file].Add(line);
+                var breakpoint = new Breakpoint
+                {
+                    Type = BreakpointType.Line,
+                    FilePath = file,
+                    Line = line,
+                    Column = 0
+                };
+                _breakpointManager.AddBreakpoint(breakpoint);
             }
         }
 
-        public void RemoveBreakpoint(string file, int line)
+        /// <summary>
+        /// Get all breakpoints
+        /// </summary>
+        public List<Breakpoint> GetAllBreakpoints()
         {
             lock (_syncLock)
             {
-                if (_breakpoints.ContainsKey(file))
-                    _breakpoints[file].Remove(line);
+                return _breakpointManager.GetAllBreakpoints();
+            }
+        }
+
+        /// <summary>
+        /// Clear all breakpoints
+        /// </summary>
+        public void ClearAllBreakpoints()
+        {
+            lock (_syncLock)
+            {
+                _breakpointManager.ClearAll();
             }
         }
 
@@ -200,19 +253,35 @@ namespace BasicLang.Debugger
             return null;
         }
 
-        private void CheckBreakpoint(int line)
+        private void CheckBreakpoint(int line, int column = 0)
         {
             if (_stopRequested) return;
 
             _currentLine = line;
 
-            // Check for breakpoints
+            // Check for breakpoints at this location
             bool shouldBreak = false;
+            List<Breakpoint> triggeredLogpoints = new();
+
             lock (_syncLock)
             {
-                foreach (var bp in _breakpoints)
+                var breakpoints = _breakpointManager.GetBreakpointsAtLocation(_currentFile, line);
+
+                foreach (var bp in breakpoints)
                 {
-                    if (bp.Value.Contains(line))
+                    // Check column if specified
+                    if (bp.Column > 0 && column > 0 && bp.Column != column)
+                        continue;
+
+                    // Handle logpoints separately
+                    if (bp.Type == BreakpointType.Logpoint)
+                    {
+                        triggeredLogpoints.Add(bp);
+                        continue;
+                    }
+
+                    // Check if this breakpoint should trigger
+                    if (bp.ShouldBreak(this))
                     {
                         shouldBreak = true;
                         break;
@@ -220,10 +289,22 @@ namespace BasicLang.Debugger
                 }
             }
 
+            // Process logpoints (these don't stop execution)
+            foreach (var logpoint in triggeredLogpoints)
+            {
+                var message = logpoint.FormatLogMessage(this);
+                LogpointHit?.Invoke(this, new LogpointEventArgs
+                {
+                    Line = line,
+                    File = _currentFile,
+                    Message = message
+                });
+            }
+
             if (shouldBreak)
             {
                 _paused = true;
-                BreakpointHit?.Invoke(this, new DebugEventArgs { Line = line });
+                BreakpointHit?.Invoke(this, new DebugEventArgs { Line = line, File = _currentFile });
                 _pauseEvent.Reset();
             }
             else if (_stepping)
@@ -249,7 +330,7 @@ namespace BasicLang.Debugger
                 {
                     _stepping = false;
                     _paused = true;
-                    StepComplete?.Invoke(this, new DebugEventArgs { Line = line });
+                    StepComplete?.Invoke(this, new DebugEventArgs { Line = line, File = _currentFile });
                     _pauseEvent.Reset();
                 }
             }
@@ -260,6 +341,26 @@ namespace BasicLang.Debugger
 
         private object ExecuteFunction(IRFunction function, object[] arguments)
         {
+            // Check for function breakpoints
+            lock (_syncLock)
+            {
+                var funcBreakpoint = _breakpointManager.GetFunctionBreakpoint(function.Name);
+                if (funcBreakpoint != null && funcBreakpoint.Enabled)
+                {
+                    if (funcBreakpoint.ShouldBreak(this))
+                    {
+                        _paused = true;
+                        BreakpointHit?.Invoke(this, new DebugEventArgs
+                        {
+                            Line = 1, // Function entry
+                            File = _currentFile
+                        });
+                        _pauseEvent.Reset();
+                        _pauseEvent.Wait();
+                    }
+                }
+            }
+
             var frame = new CallFrame
             {
                 FunctionName = function.Name,
@@ -576,5 +677,15 @@ namespace BasicLang.Debugger
         {
             public object Value { get; set; }
         }
+    }
+
+    /// <summary>
+    /// Event args for logpoint hits
+    /// </summary>
+    public class LogpointEventArgs : EventArgs
+    {
+        public int Line { get; set; }
+        public string File { get; set; }
+        public string Message { get; set; }
     }
 }

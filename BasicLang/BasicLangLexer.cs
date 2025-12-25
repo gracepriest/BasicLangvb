@@ -57,6 +57,8 @@ namespace BasicLang.Compiler
         EndIf,
         Select,
         Case,
+        Is,
+        TypeOf,
         EndSelect,
         For,
         Next,
@@ -78,6 +80,12 @@ namespace BasicLang.Compiler
         EndSub,
         EndFunction,
         Return,
+
+        // Keywords - Parameters
+        Optional,
+        ParamArray,
+        ByVal,
+        ByRef,
         
         // Keywords - Error Handling
         Try,
@@ -130,7 +138,8 @@ namespace BasicLang.Compiler
         Shared,          // Static
         Overridable,     // Virtual
         Overrides,       // Override
-        MustOverride,    // Abstract
+        MustOverride,    // Abstract method
+        MustInherit,     // Abstract class
         NotOverridable,  // Sealed
         Operator,        // For operator overloading
         Widening,        // For widening conversion
@@ -340,6 +349,8 @@ namespace BasicLang.Compiler
             { "End If", TokenType.EndIf },
             { "Select", TokenType.Select },
             { "Case", TokenType.Case },
+            { "Is", TokenType.Is },
+            { "TypeOf", TokenType.TypeOf },
             { "End Select", TokenType.EndSelect },
             { "For", TokenType.For },
             { "Next", TokenType.Next },
@@ -354,6 +365,10 @@ namespace BasicLang.Compiler
             { "Until", TokenType.Until },
             { "With", TokenType.With },
             { "End With", TokenType.EndWith },
+            { "Optional", TokenType.Optional },
+            { "ParamArray", TokenType.ParamArray },
+            { "ByVal", TokenType.ByVal },
+            { "ByRef", TokenType.ByRef },
 
             // Functions and Subroutines
             { "Sub", TokenType.Sub },
@@ -409,6 +424,7 @@ namespace BasicLang.Compiler
             { "Overridable", TokenType.Overridable },
             { "Overrides", TokenType.Overrides },
             { "MustOverride", TokenType.MustOverride },
+            { "MustInherit", TokenType.MustInherit },
             { "NotOverridable", TokenType.NotOverridable },
             { "Widening", TokenType.Widening },
             { "Narrowing", TokenType.Narrowing },

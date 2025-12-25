@@ -38,6 +38,16 @@ namespace BasicLang.Compiler.LSP
                     .WithHandler<RenameHandler>()
                     .WithHandler<PrepareRenameHandler>()
                     .WithHandler<SignatureHelpHandler>()
+                    .WithHandler<CodeActionHandler>()
+                    .WithHandler<FormattingHandler>()
+                    .WithHandler<RangeFormattingHandler>()
+                    .WithHandler<FoldingRangeHandler>()
+                    .WithHandler<InlayHintsHandler>()
+                    .WithHandler<DocumentLinkHandler>()
+                    .WithHandler<CallHierarchyPrepareHandler>()
+                    .WithHandler<CallHierarchyIncomingHandler>()
+                    .WithHandler<CallHierarchyOutgoingHandler>()
+                    .WithHandler<WorkspaceSymbolHandler>()
                     .OnInitialize(OnInitializeAsync)
                     .OnInitialized(OnInitializedAsync);
             }).ConfigureAwait(false);

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
+#include <functional>
 #include <memory>
 
 using namespace std;
@@ -18,7 +19,6 @@ void Main();
 void Main()
 {
     int32_t result = 0;
-
 
     result = MessageBoxA("Hello from BasicLang!");
     cout << "Message result: " << endl;

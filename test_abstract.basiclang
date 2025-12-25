@@ -1,0 +1,46 @@
+' Test Abstract Class Support in BasicLang
+
+' Define an abstract base class
+MustInherit Class Animal
+    Public Name As String
+
+    ' Abstract method - no implementation
+    Public MustOverride Sub MakeSound()
+
+    ' Concrete method
+    Public Sub Eat()
+        ' Implementation here
+    End Sub
+End Class
+
+' Concrete derived class
+Class Dog
+    Inherits Animal
+
+    ' Must implement abstract method
+    Public Overrides Sub MakeSound()
+        ' Bark!
+    End Sub
+End Class
+
+' Another concrete derived class
+Class Cat
+    Inherits Animal
+
+    Public Overrides Sub MakeSound()
+        ' Meow!
+    End Sub
+End Class
+
+' Test function
+Sub Main()
+    ' This should cause an error - cannot instantiate abstract class
+    ' Dim animal As Animal = New Animal()
+
+    ' This is allowed - instantiating concrete classes
+    Dim dog As Dog = New Dog()
+    Dim cat As Cat = New Cat()
+
+    dog.MakeSound()
+    cat.MakeSound()
+End Sub

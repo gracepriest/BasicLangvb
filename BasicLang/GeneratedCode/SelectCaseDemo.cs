@@ -32,7 +32,7 @@ namespace GeneratedCode
                     result = "Weekend";
                     break;
             }
-            return result;
+            return "Weekend";
         }
 
         public static void Main()

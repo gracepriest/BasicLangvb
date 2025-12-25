@@ -19,7 +19,7 @@ namespace GeneratedCode
             {
                 rand = Random.Shared.NextDouble();
                 Console.WriteLine(rand);
-                i = i + 1;
+                i = 2;
             }
             Console.WriteLine("Simulated dice rolls:");
             i = 1;
@@ -27,7 +27,7 @@ namespace GeneratedCode
             {
                 diceRoll = Convert.ToInt32(Math.Floor(Random.Shared.NextDouble() * 6)) + 1;
                 Console.WriteLine(diceRoll);
-                i = i + 1;
+                i = 2;
             }
         }
 

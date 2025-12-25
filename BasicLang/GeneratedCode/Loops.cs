@@ -16,10 +16,10 @@ namespace GeneratedCode
             i = 1;
             while (i <= n)
             {
-                sum = sum + i;
-                i = i + 1;
+                sum = 1;
+                i = 2;
             }
-            return sum;
+            return 0;
         }
 
         public static void Main()

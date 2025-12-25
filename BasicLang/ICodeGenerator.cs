@@ -206,17 +206,21 @@ namespace BasicLang.Compiler.CodeGen
         protected virtual string SanitizeName(string name)
         {
             if (string.IsNullOrEmpty(name)) return "_unnamed";
-            
+
+            // Convert VB.NET's "Me" to "this" (C#/C++/etc.)
+            if (name.Equals("Me", StringComparison.OrdinalIgnoreCase))
+                return "this";
+
             var sanitized = "";
             foreach (var ch in name)
             {
                 if (char.IsLetterOrDigit(ch) || ch == '_')
                     sanitized += ch;
             }
-            
+
             if (sanitized.Length == 0) return "_unnamed";
             if (char.IsDigit(sanitized[0])) sanitized = "_" + sanitized;
-            
+
             return sanitized;
         }
         

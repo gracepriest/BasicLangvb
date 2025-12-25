@@ -40,6 +40,11 @@ namespace GeneratedCode
             }
         }
 
+        public string GetInfo()
+        {
+            return ((this.Name + " is ") + Convert.ToString(this.Age)) + " years old";
+        }
+
         public virtual string Greet()
         {
             return "Hello, I am " + _name;
@@ -92,6 +97,7 @@ namespace GeneratedCode
             employee = new Employee("Jane", 25, "Engineering");
             Console.WriteLine(person.Name);
             Console.WriteLine(person.Age);
+            Console.WriteLine(person.GetInfo());
             person.Name = "Johnny";
             Console.WriteLine(person.Name);
             Console.WriteLine(employee.Department);

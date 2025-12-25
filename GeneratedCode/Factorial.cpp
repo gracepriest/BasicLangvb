@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
+#include <functional>
 #include <memory>
 
 using namespace std;
@@ -42,7 +43,6 @@ if.else:
 void Main()
 {
     int32_t result = 0;
-
 
     result = Factorial(5);
     cout << result << endl;

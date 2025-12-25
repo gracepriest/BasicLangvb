@@ -70,10 +70,530 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Generate assembly header
             GenerateHeader(module);
 
-            // Generate class with methods
+            // Generate enums
+            foreach (var irEnum in module.Enums.Values)
+            {
+                GenerateEnum(irEnum);
+                WriteLine();
+            }
+
+            // Generate delegates
+            foreach (var irDelegate in module.Delegates.Values)
+            {
+                GenerateDelegate(irDelegate);
+                WriteLine();
+            }
+
+            // Generate interfaces
+            foreach (var irInterface in module.Interfaces.Values)
+            {
+                GenerateInterface(irInterface);
+                WriteLine();
+            }
+
+            // Generate user-defined classes
+            foreach (var irClass in module.Classes.Values)
+            {
+                GenerateUserClass(irClass);
+                WriteLine();
+            }
+
+            // Generate main module class with standalone methods
             GenerateClass(module);
 
             return _output.ToString();
+        }
+
+        private void GenerateEnum(IREnum irEnum)
+        {
+            var enumName = SanitizeName(irEnum.Name);
+            var underlyingType = "int32";
+            if (irEnum.UnderlyingType != null)
+            {
+                underlyingType = MapType(irEnum.UnderlyingType);
+            }
+
+            WriteLine($".class public auto ansi sealed {enumName}");
+            WriteLine("       extends [mscorlib]System.Enum");
+            WriteLine("{");
+
+            // Value field
+            WriteLine($"  .field public specialname rtspecialname {underlyingType} value__");
+
+            // Enum members as static literal fields
+            foreach (var member in irEnum.Members)
+            {
+                var value = member.Value ?? 0;
+                WriteLine($"  .field public static literal valuetype {enumName} {SanitizeName(member.Name)} = {underlyingType}({value})");
+            }
+
+            WriteLine($"}} // end of class {enumName}");
+        }
+
+        private void GenerateDelegate(IRDelegate irDelegate)
+        {
+            var delegateName = SanitizeName(irDelegate.Name);
+            var returnType = MapType(irDelegate.ReturnType);
+            var paramTypes = string.Join(", ", irDelegate.Parameters.Select(p => MapTypeName(p.TypeName)));
+
+            WriteLine($".class public auto ansi sealed {delegateName}");
+            WriteLine("       extends [mscorlib]System.MulticastDelegate");
+            WriteLine("{");
+
+            // Constructor
+            WriteLine("  .method public hidebysig specialname rtspecialname");
+            WriteLine("          instance void .ctor(object 'object', native int 'method') runtime managed");
+            WriteLine("  {");
+            WriteLine("  } // end of method .ctor");
+            WriteLine();
+
+            // Invoke method
+            WriteLine("  .method public hidebysig newslot virtual");
+            WriteLine($"          instance {returnType} Invoke({paramTypes}) runtime managed");
+            WriteLine("  {");
+            WriteLine("  } // end of method Invoke");
+            WriteLine();
+
+            // BeginInvoke
+            WriteLine("  .method public hidebysig newslot virtual");
+            WriteLine($"          instance class [mscorlib]System.IAsyncResult BeginInvoke({paramTypes}, class [mscorlib]System.AsyncCallback callback, object 'object') runtime managed");
+            WriteLine("  {");
+            WriteLine("  } // end of method BeginInvoke");
+            WriteLine();
+
+            // EndInvoke
+            WriteLine("  .method public hidebysig newslot virtual");
+            WriteLine($"          instance {returnType} EndInvoke(class [mscorlib]System.IAsyncResult result) runtime managed");
+            WriteLine("  {");
+            WriteLine("  } // end of method EndInvoke");
+
+            WriteLine($"}} // end of class {delegateName}");
+        }
+
+        private string MapTypeName(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "object";
+            return typeName.ToLowerInvariant() switch
+            {
+                "integer" => "int32",
+                "long" => "int64",
+                "single" => "float32",
+                "double" => "float64",
+                "string" => "string",
+                "boolean" => "bool",
+                "byte" => "uint8",
+                "short" => "int16",
+                "object" => "object",
+                "void" => "void",
+                _ => SanitizeName(typeName)
+            };
+        }
+
+        private void GenerateInterface(IRInterface irInterface)
+        {
+            var interfaceName = SanitizeName(irInterface.Name);
+
+            // Build implements list
+            var implements = "";
+            if (irInterface.BaseInterfaces.Count > 0)
+            {
+                implements = " implements " + string.Join(", ", irInterface.BaseInterfaces.Select(b => SanitizeName(b)));
+            }
+
+            WriteLine($".class interface public abstract auto ansi {interfaceName}{implements}");
+            WriteLine("{");
+
+            // Interface methods
+            foreach (var method in irInterface.Methods)
+            {
+                var returnType = MapType(method.ReturnType);
+                var methodName = SanitizeName(method.Name);
+                var paramTypes = string.Join(", ", method.Parameters.Select(p => MapTypeName(p.TypeName)));
+
+                WriteLine("  .method public hidebysig newslot abstract virtual");
+                WriteLine($"          instance {returnType} {methodName}({paramTypes}) cil managed");
+                WriteLine("  {");
+                WriteLine("  } // end of method " + methodName);
+                WriteLine();
+            }
+
+            // Interface properties
+            foreach (var prop in irInterface.Properties)
+            {
+                var propType = MapType(prop.Type);
+                var propName = SanitizeName(prop.Name);
+
+                WriteLine($"  .property instance {propType} {propName}()");
+                WriteLine("  {");
+                if (prop.HasGetter)
+                    WriteLine($"    .get instance {propType} {interfaceName}::get_{propName}()");
+                if (prop.HasSetter)
+                    WriteLine($"    .set instance void {interfaceName}::set_{propName}({propType})");
+                WriteLine("  }");
+                WriteLine();
+
+                // Getter method
+                if (prop.HasGetter)
+                {
+                    WriteLine("  .method public hidebysig newslot specialname abstract virtual");
+                    WriteLine($"          instance {propType} get_{propName}() cil managed");
+                    WriteLine("  {");
+                    WriteLine("  }");
+                }
+
+                // Setter method
+                if (prop.HasSetter)
+                {
+                    WriteLine("  .method public hidebysig newslot specialname abstract virtual");
+                    WriteLine($"          instance void set_{propName}({propType} 'value') cil managed");
+                    WriteLine("  {");
+                    WriteLine("  }");
+                }
+            }
+
+            WriteLine($"}} // end of interface {interfaceName}");
+        }
+
+        private void GenerateUserClass(IRClass irClass)
+        {
+            var className = SanitizeName(irClass.Name);
+
+            // Build extends and implements
+            var extends = "[mscorlib]System.Object";
+            if (!string.IsNullOrEmpty(irClass.BaseClass))
+            {
+                extends = SanitizeName(irClass.BaseClass);
+            }
+
+            var implements = "";
+            if (irClass.Interfaces.Count > 0)
+            {
+                implements = " implements " + string.Join(", ", irClass.Interfaces.Select(i => SanitizeName(i)));
+            }
+
+            WriteLine($".class public auto ansi beforefieldinit {className}");
+            WriteLine($"       extends {extends}{implements}");
+            WriteLine("{");
+
+            // Fields
+            foreach (var field in irClass.Fields)
+            {
+                var access = MapAccessModifier(field.Access);
+                var staticMod = field.IsStatic ? "static " : "";
+                var fieldType = MapType(field.Type);
+                var fieldName = SanitizeName(field.Name);
+                WriteLine($"  .field {access} {staticMod}{fieldType} {fieldName}");
+            }
+
+            if (irClass.Fields.Count > 0)
+                WriteLine();
+
+            // Events
+            foreach (var evt in irClass.Events)
+            {
+                GenerateEvent(irClass, evt);
+            }
+
+            // Properties
+            foreach (var prop in irClass.Properties)
+            {
+                GenerateProperty(irClass, prop);
+            }
+
+            // Constructors
+            foreach (var ctor in irClass.Constructors)
+            {
+                GenerateConstructor(irClass, ctor);
+            }
+
+            // Default constructor if none defined
+            if (irClass.Constructors.Count == 0)
+            {
+                GenerateDefaultCtorForClass(irClass);
+            }
+
+            // Methods
+            foreach (var method in irClass.Methods)
+            {
+                GenerateClassMethod(irClass, method);
+            }
+
+            WriteLine($"}} // end of class {className}");
+        }
+
+        private string MapAccessModifier(AccessModifier access)
+        {
+            return access switch
+            {
+                AccessModifier.Public => "public",
+                AccessModifier.Private => "private",
+                AccessModifier.Protected => "family",
+                AccessModifier.Friend => "assembly",
+                _ => "private"
+            };
+        }
+
+        private void GenerateEvent(IRClass irClass, IREvent evt)
+        {
+            var delegateType = SanitizeName(evt.DelegateType);
+            var eventName = SanitizeName(evt.Name);
+            var staticMod = evt.IsStatic ? "static " : "";
+
+            // Backing field
+            WriteLine($"  .field private {staticMod}class {delegateType} {eventName}");
+
+            // Event declaration
+            WriteLine($"  .event class {delegateType} {eventName}");
+            WriteLine("  {");
+            WriteLine($"    .addon instance void {SanitizeName(irClass.Name)}::add_{eventName}(class {delegateType})");
+            WriteLine($"    .removeon instance void {SanitizeName(irClass.Name)}::remove_{eventName}(class {delegateType})");
+            WriteLine("  }");
+            WriteLine();
+
+            // Add method
+            WriteLine($"  .method public hidebysig specialname {staticMod}instance void");
+            WriteLine($"          add_{eventName}(class {delegateType} 'value') cil managed");
+            WriteLine("  {");
+            WriteLine("    .maxstack 8");
+            if (!evt.IsStatic) WriteLine("    ldarg.0");
+            if (!evt.IsStatic) WriteLine($"    ldarg.0");
+            if (!evt.IsStatic) WriteLine($"    ldfld class {delegateType} {SanitizeName(irClass.Name)}::{eventName}");
+            else WriteLine($"    ldsfld class {delegateType} {SanitizeName(irClass.Name)}::{eventName}");
+            WriteLine("    ldarg.1");
+            WriteLine($"    call class [mscorlib]System.Delegate [mscorlib]System.Delegate::Combine(class [mscorlib]System.Delegate, class [mscorlib]System.Delegate)");
+            WriteLine($"    castclass {delegateType}");
+            if (!evt.IsStatic) WriteLine($"    stfld class {delegateType} {SanitizeName(irClass.Name)}::{eventName}");
+            else WriteLine($"    stsfld class {delegateType} {SanitizeName(irClass.Name)}::{eventName}");
+            WriteLine("    ret");
+            WriteLine("  }");
+            WriteLine();
+
+            // Remove method
+            WriteLine($"  .method public hidebysig specialname {staticMod}instance void");
+            WriteLine($"          remove_{eventName}(class {delegateType} 'value') cil managed");
+            WriteLine("  {");
+            WriteLine("    .maxstack 8");
+            if (!evt.IsStatic) WriteLine("    ldarg.0");
+            if (!evt.IsStatic) WriteLine($"    ldarg.0");
+            if (!evt.IsStatic) WriteLine($"    ldfld class {delegateType} {SanitizeName(irClass.Name)}::{eventName}");
+            else WriteLine($"    ldsfld class {delegateType} {SanitizeName(irClass.Name)}::{eventName}");
+            WriteLine("    ldarg.1");
+            WriteLine($"    call class [mscorlib]System.Delegate [mscorlib]System.Delegate::Remove(class [mscorlib]System.Delegate, class [mscorlib]System.Delegate)");
+            WriteLine($"    castclass {delegateType}");
+            if (!evt.IsStatic) WriteLine($"    stfld class {delegateType} {SanitizeName(irClass.Name)}::{eventName}");
+            else WriteLine($"    stsfld class {delegateType} {SanitizeName(irClass.Name)}::{eventName}");
+            WriteLine("    ret");
+            WriteLine("  }");
+            WriteLine();
+        }
+
+        private void GenerateProperty(IRClass irClass, IRProperty prop)
+        {
+            var propType = MapType(prop.Type);
+            var propName = SanitizeName(prop.Name);
+            var className = SanitizeName(irClass.Name);
+            var staticMod = prop.IsStatic ? "static " : "";
+            var instanceMod = prop.IsStatic ? "" : "instance ";
+
+            // Property declaration
+            WriteLine($"  .property {instanceMod}{propType} {propName}()");
+            WriteLine("  {");
+            if (!prop.IsWriteOnly)
+                WriteLine($"    .get {instanceMod}{propType} {className}::get_{propName}()");
+            if (!prop.IsReadOnly)
+                WriteLine($"    .set {instanceMod}void {className}::set_{propName}({propType})");
+            WriteLine("  }");
+            WriteLine();
+
+            // Getter
+            if (prop.Getter != null && !prop.IsWriteOnly)
+            {
+                var virtualMod = "";  // Could add virtual if needed
+                WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
+                WriteLine($"          {instanceMod}{propType} get_{propName}() cil managed");
+                WriteLine("  {");
+                WriteLine("    .maxstack 8");
+
+                if (prop.Getter.EntryBlock != null)
+                {
+                    _currentFunction = prop.Getter;
+                    InitializeMethodContext(prop.Getter);
+                    var visited = new HashSet<BasicBlock>();
+                    GenerateBasicBlock(prop.Getter.EntryBlock, visited, isEntry: true);
+                    _currentFunction = null;
+                }
+                else
+                {
+                    // Default: return default value
+                    WriteLine($"    ldnull");
+                    WriteLine("    ret");
+                }
+
+                WriteLine($"  }} // end of method get_{propName}");
+                WriteLine();
+            }
+
+            // Setter
+            if (prop.Setter != null && !prop.IsReadOnly)
+            {
+                var virtualMod = "";
+                WriteLine($"  .method public hidebysig specialname {virtualMod}{staticMod}");
+                WriteLine($"          {instanceMod}void set_{propName}({propType} 'value') cil managed");
+                WriteLine("  {");
+                WriteLine("    .maxstack 8");
+
+                if (prop.Setter.EntryBlock != null)
+                {
+                    _currentFunction = prop.Setter;
+                    InitializeMethodContext(prop.Setter);
+                    var visited = new HashSet<BasicBlock>();
+                    GenerateBasicBlock(prop.Setter.EntryBlock, visited, isEntry: true);
+                    _currentFunction = null;
+                }
+
+                if (!EndsWithRet())
+                    WriteLine("    ret");
+
+                WriteLine($"  }} // end of method set_{propName}");
+                WriteLine();
+            }
+        }
+
+        private void GenerateConstructor(IRClass irClass, IRConstructor ctor)
+        {
+            var className = SanitizeName(irClass.Name);
+            var paramTypes = "";
+
+            if (ctor.Implementation != null)
+            {
+                paramTypes = string.Join(", ", ctor.Implementation.Parameters.Select(p =>
+                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+            }
+
+            WriteLine("  .method public hidebysig specialname rtspecialname");
+            WriteLine($"          instance void .ctor({paramTypes}) cil managed");
+            WriteLine("  {");
+            WriteLine("    .maxstack 8");
+
+            // Call base constructor
+            var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : SanitizeName(irClass.BaseClass);
+            WriteLine("    ldarg.0");
+            WriteLine($"    call instance void {baseClass}::.ctor()");
+
+            // Generate constructor body
+            if (ctor.Implementation?.EntryBlock != null)
+            {
+                _currentFunction = ctor.Implementation;
+                InitializeMethodContext(ctor.Implementation);
+                var visited = new HashSet<BasicBlock>();
+                GenerateBasicBlock(ctor.Implementation.EntryBlock, visited, isEntry: true);
+                _currentFunction = null;
+            }
+
+            if (!EndsWithRet())
+                WriteLine("    ret");
+
+            WriteLine("  } // end of method .ctor");
+            WriteLine();
+        }
+
+        private void GenerateDefaultCtorForClass(IRClass irClass)
+        {
+            var baseClass = string.IsNullOrEmpty(irClass.BaseClass) ? "[mscorlib]System.Object" : SanitizeName(irClass.BaseClass);
+
+            WriteLine("  .method public hidebysig specialname rtspecialname");
+            WriteLine("          instance void .ctor() cil managed");
+            WriteLine("  {");
+            WriteLine("    .maxstack 8");
+            WriteLine("    ldarg.0");
+            WriteLine($"    call instance void {baseClass}::.ctor()");
+            WriteLine("    ret");
+            WriteLine("  } // end of method .ctor");
+            WriteLine();
+        }
+
+        private void GenerateClassMethod(IRClass irClass, IRMethod method)
+        {
+            var className = SanitizeName(irClass.Name);
+            var methodName = SanitizeName(method.Name);
+            var returnType = MapType(method.ReturnType);
+            var staticMod = method.IsStatic ? "static " : "";
+            var instanceMod = method.IsStatic ? "" : "instance ";
+            var virtualMod = method.IsVirtual ? "virtual " : "";
+            var overrideMod = method.IsOverride ? "virtual " : "";
+
+            var paramTypes = "";
+            if (method.Implementation != null)
+            {
+                paramTypes = string.Join(", ", method.Implementation.Parameters.Select(p =>
+                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+            }
+
+            WriteLine($"  .method public hidebysig {virtualMod}{overrideMod}{staticMod}");
+            WriteLine($"          {instanceMod}{returnType} {methodName}({paramTypes}) cil managed");
+            WriteLine("  {");
+
+            if (method.Implementation != null)
+            {
+                _currentFunction = method.Implementation;
+                InitializeMethodContext(method.Implementation);
+
+                // Calculate max stack
+                _maxStack = Math.Max(8, _localIndices.Count + _tempIndices.Count + 4);
+                WriteLine($"    .maxstack {_maxStack}");
+
+                // Declare locals
+                if (_localIndices.Count > 0 || _tempIndices.Count > 0)
+                {
+                    GenerateLocalsDeclaration(method.Implementation);
+                }
+
+                WriteLine();
+
+                // Generate body
+                if (method.Implementation.EntryBlock != null)
+                {
+                    var visited = new HashSet<BasicBlock>();
+                    GenerateBasicBlock(method.Implementation.EntryBlock, visited, isEntry: true);
+                }
+
+                _currentFunction = null;
+            }
+
+            // Ensure return
+            if (returnType == "void" && !EndsWithRet())
+            {
+                WriteLine("    ret");
+            }
+
+            WriteLine($"  }} // end of method {methodName}");
+            WriteLine();
+        }
+
+        private void InitializeMethodContext(IRFunction function)
+        {
+            _localIndices.Clear();
+            _paramIndices.Clear();
+            _tempIndices.Clear();
+            _tempNameIndices.Clear();
+            _declaredIdentifiers.Clear();
+            _localCounter = 0;
+            _maxStack = 8;
+            _currentStack = 0;
+
+            foreach (var param in function.Parameters)
+            {
+                _declaredIdentifiers.Add(param.Name);
+                _paramIndices[param.Name] = _paramIndices.Count;
+            }
+
+            foreach (var local in function.LocalVariables)
+            {
+                _declaredIdentifiers.Add(local.Name);
+                _localIndices[local.Name] = _localIndices.Count;
+            }
+
+            AllocateTemporaries(function);
         }
 
         private void GenerateHeader(IRModule module)
@@ -564,6 +1084,27 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRBinaryOp binaryOp)
         {
+            // Handle string concatenation specially
+            if (binaryOp.Operation == BinaryOpKind.Concat)
+            {
+                EmitLoadValue(binaryOp.Left);
+                EmitLoadValue(binaryOp.Right);
+                WriteLine("    call string [mscorlib]System.String::Concat(string, string)");
+                _currentStack--; // Two pops, one push = net -1
+
+                // Store result
+                if (!string.IsNullOrEmpty(binaryOp.Name) && _declaredIdentifiers.Contains(binaryOp.Name))
+                {
+                    EmitStoreLocal(binaryOp.Name);
+                }
+                else
+                {
+                    var tempIdx = GetTempIndex(binaryOp);
+                    EmitStloc(tempIdx);
+                }
+                return;
+            }
+
             // Load operands onto stack
             EmitLoadValue(binaryOp.Left);
             EmitLoadValue(binaryOp.Right);

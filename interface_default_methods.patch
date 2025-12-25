@@ -1,0 +1,75 @@
+Index: BasicLang/Parser.cs
+===================================================================
+--- BasicLang/Parser.cs (original)
++++ BasicLang/Parser.cs (modified)
+@@ -843,12 +843,10 @@
+             {
+                 if (Check(TokenType.Function))
+                 {
+                     var method = ParseInterfaceFunction();
+-                    method.IsAbstract = true;
+                     node.Methods.Add(method);
+                 }
+                 else if (Check(TokenType.Sub))
+                 {
+                     var method = ParseInterfaceSub();
+-                    method.IsAbstract = true;
+                     node.Methods.Add(method);
+                 }
+@@ -879,9 +877,24 @@
+             if (Match(TokenType.As))
+             {
+                 node.ReturnType = ParseTypeReference();
+             }
+
+-            // Interface methods have no body
+             ConsumeNewlines();
++
++            // Check if this method has a default implementation (body)
++            if (!Check(TokenType.EndInterface) && !Check(TokenType.Function) && !Check(TokenType.Sub) && !IsAtEnd())
++            {
++                // Parse default implementation
++                node.Body = ParseBlock(new[] { TokenType.EndFunction, TokenType.EndInterface, TokenType.Function, TokenType.Sub });
++
++                if (Check(TokenType.EndFunction))
++                {
++                    Consume(TokenType.EndFunction, "Expected 'End Function'");
++                    ConsumeNewlines();
++                }
++                node.IsAbstract = false;
++            }
++            else
++            {
++                node.IsAbstract = true;
++            }
++
+             return node;
+         }
+@@ -906,9 +919,24 @@
+             Consume(TokenType.RightParen, "Expected ')' after parameters");
+
+             node.ReturnType = new TypeReference("Void");
+
+-            // Interface methods have no body
+             ConsumeNewlines();
++
++            // Check if this method has a default implementation (body)
++            if (!Check(TokenType.EndInterface) && !Check(TokenType.Function) && !Check(TokenType.Sub) && !IsAtEnd())
++            {
++                // Parse default implementation
++                node.Body = ParseBlock(new[] { TokenType.EndSub, TokenType.EndInterface, TokenType.Function, TokenType.Sub });
++
++                if (Check(TokenType.EndSub))
++                {
++                    Consume(TokenType.EndSub, "Expected 'End Sub'");
++                    ConsumeNewlines();
++                }
++                node.IsAbstract = false;
++            }
++            else
++            {
++                node.IsAbstract = true;
++            }
++
+             return node;
+         }

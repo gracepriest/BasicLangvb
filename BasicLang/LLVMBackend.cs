@@ -18,8 +18,11 @@ namespace BasicLang.Compiler.CodeGen.LLVM
         private readonly Dictionary<string, int> _stringConstants;
         private readonly HashSet<string> _declaredIdentifiers;
         private readonly Dictionary<IRValue, string> _llvmNames;
+        private readonly Dictionary<string, List<string>> _classFieldNames;  // class -> field names in order
+        private readonly Dictionary<string, Dictionary<string, int>> _classFieldIndices;  // class -> field -> index
+        private readonly Dictionary<string, string> _classStructTypes;  // class -> LLVM struct type
         private IRModule _module;
-        private int _tempCounter;
+        private new int _tempCounter;
         private int _labelCounter;
         private int _stringCounter;
 
@@ -33,6 +36,9 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             _stringConstants = new Dictionary<string, int>();
             _declaredIdentifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             _llvmNames = new Dictionary<IRValue, string>();
+            _classFieldNames = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            _classFieldIndices = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
+            _classStructTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             _typeMapper = new LLVMTypeMapper();
         }
 
@@ -59,6 +65,9 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             _module = module;
             _output.Clear();
             _stringConstants.Clear();
+            _classFieldNames.Clear();
+            _classFieldIndices.Clear();
+            _classStructTypes.Clear();
             _tempCounter = 0;
             _labelCounter = 0;
             _stringCounter = 0;
@@ -69,16 +78,70 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             // Generate module header
             GenerateHeader(module);
 
+            // Generate enum constants
+            if (module.Enums.Count > 0)
+            {
+                WriteLine("; Enum constants");
+                foreach (var irEnum in module.Enums.Values)
+                {
+                    GenerateEnum(irEnum);
+                }
+                WriteLine();
+            }
+
+            // Generate class struct types
+            if (module.Classes.Count > 0)
+            {
+                WriteLine("; Class struct types");
+                foreach (var irClass in module.Classes.Values)
+                {
+                    GenerateClassStructType(irClass);
+                }
+                WriteLine();
+            }
+
+            // Generate delegate types (function pointer types)
+            if (module.Delegates.Count > 0)
+            {
+                WriteLine("; Delegate types (function pointers)");
+                foreach (var irDelegate in module.Delegates.Values)
+                {
+                    GenerateDelegate(irDelegate);
+                }
+                WriteLine();
+            }
+
+            // Generate interface vtable types
+            if (module.Interfaces.Count > 0)
+            {
+                WriteLine("; Interface vtable types");
+                foreach (var irInterface in module.Interfaces.Values)
+                {
+                    GenerateInterfaceVtable(irInterface);
+                }
+                WriteLine();
+            }
+
             // Generate string constant declarations
             GenerateStringConstants();
 
             // Generate external function declarations
             GenerateExternals();
 
-            // Generate function definitions
+            // Generate class methods
+            if (module.Classes.Count > 0)
+            {
+                WriteLine("; Class methods");
+                foreach (var irClass in module.Classes.Values)
+                {
+                    GenerateClassMethods(irClass);
+                }
+            }
+
+            // Generate standalone function definitions
             foreach (var function in module.Functions)
             {
-                if (!function.IsExternal)
+                if (!function.IsExternal && !IsClassMethod(function, module))
                 {
                     GenerateFunction(function);
                     WriteLine();
@@ -86,6 +149,371 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             }
 
             return _output.ToString();
+        }
+
+        private bool IsClassMethod(IRFunction function, IRModule module)
+        {
+            foreach (var irClass in module.Classes.Values)
+            {
+                if (irClass.Methods.Any(m => m.Implementation == function))
+                    return true;
+                if (irClass.Constructors.Any(c => c.Implementation == function))
+                    return true;
+                if (irClass.Properties.Any(p => p.Getter == function || p.Setter == function))
+                    return true;
+            }
+            return false;
+        }
+
+        private void GenerateEnum(IREnum irEnum)
+        {
+            var enumName = SanitizeLLVMName(irEnum.Name);
+            foreach (var member in irEnum.Members)
+            {
+                var memberName = $"{enumName}_{SanitizeLLVMName(member.Name)}";
+                var value = member.Value ?? 0;
+                WriteLine($"@{memberName} = constant i32 {value}");
+            }
+        }
+
+        private void GenerateClassStructType(IRClass irClass)
+        {
+            var className = SanitizeLLVMName(irClass.Name);
+            var fieldTypes = new List<string>();
+            var fieldNames = new List<string>();
+            var fieldIndices = new Dictionary<string, int>();
+
+            // Inherit fields from base class if any
+            int fieldIndex = 0;
+            if (!string.IsNullOrEmpty(irClass.BaseClass) && _classFieldNames.ContainsKey(irClass.BaseClass))
+            {
+                foreach (var baseField in _classFieldNames[irClass.BaseClass])
+                {
+                    var baseFieldType = GetFieldType(irClass.BaseClass, baseField);
+                    fieldTypes.Add(baseFieldType);
+                    fieldNames.Add(baseField);
+                    fieldIndices[baseField] = fieldIndex++;
+                }
+            }
+
+            // Add own fields
+            foreach (var field in irClass.Fields)
+            {
+                var fieldType = MapType(field.Type);
+                fieldTypes.Add(fieldType);
+                fieldNames.Add(field.Name);
+                fieldIndices[field.Name] = fieldIndex++;
+            }
+
+            _classFieldNames[irClass.Name] = fieldNames;
+            _classFieldIndices[irClass.Name] = fieldIndices;
+
+            // Generate struct type
+            var structBody = fieldTypes.Count > 0 ? string.Join(", ", fieldTypes) : "i8";
+            var structType = $"{{ {structBody} }}";
+            _classStructTypes[irClass.Name] = $"%class.{className}";
+
+            WriteLine($"%class.{className} = type {structType}");
+        }
+
+        private string GetFieldType(string className, string fieldName)
+        {
+            if (_module.Classes.TryGetValue(className, out var irClass))
+            {
+                var field = irClass.Fields.FirstOrDefault(f => f.Name.Equals(fieldName, StringComparison.OrdinalIgnoreCase));
+                if (field != null)
+                    return MapType(field.Type);
+            }
+            return "i32";  // Default
+        }
+
+        private void GenerateDelegate(IRDelegate irDelegate)
+        {
+            var delegateName = SanitizeLLVMName(irDelegate.Name);
+            var returnType = MapType(irDelegate.ReturnType);
+            var paramTypes = string.Join(", ", irDelegate.Parameters.Select(p => MapTypeName(p.TypeName)));
+
+            // Delegate as function pointer type
+            WriteLine($"%delegate.{delegateName} = type {returnType} ({paramTypes})*");
+        }
+
+        private string MapTypeName(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return "i8*";
+            return typeName.ToLowerInvariant() switch
+            {
+                "integer" => "i32",
+                "long" => "i64",
+                "single" or "float" => "float",
+                "double" => "double",
+                "string" => "i8*",
+                "boolean" => "i1",
+                "byte" => "i8",
+                "short" => "i16",
+                "object" => "i8*",
+                "void" => "void",
+                _ => "i8*"  // Default to pointer for unknown types
+            };
+        }
+
+        private void GenerateInterfaceVtable(IRInterface irInterface)
+        {
+            var interfaceName = SanitizeLLVMName(irInterface.Name);
+            var methodPtrs = new List<string>();
+
+            foreach (var method in irInterface.Methods)
+            {
+                var returnType = MapType(method.ReturnType);
+                var paramTypes = new List<string> { "i8*" };  // this pointer
+                paramTypes.AddRange(method.Parameters.Select(p => MapTypeName(p.TypeName)));
+                methodPtrs.Add($"{returnType} ({string.Join(", ", paramTypes)})*");
+            }
+
+            var vtableBody = methodPtrs.Count > 0 ? string.Join(", ", methodPtrs) : "i8*";
+            WriteLine($"%vtable.{interfaceName} = type {{ {vtableBody} }}");
+        }
+
+        private void GenerateClassMethods(IRClass irClass)
+        {
+            var className = SanitizeLLVMName(irClass.Name);
+
+            // Generate constructors
+            foreach (var ctor in irClass.Constructors)
+            {
+                if (ctor.Implementation != null)
+                {
+                    GenerateConstructor(irClass, ctor);
+                    WriteLine();
+                }
+            }
+
+            // Generate methods
+            foreach (var method in irClass.Methods)
+            {
+                if (method.Implementation != null)
+                {
+                    GenerateMethod(irClass, method);
+                    WriteLine();
+                }
+            }
+
+            // Generate property getters/setters
+            foreach (var prop in irClass.Properties)
+            {
+                if (prop.Getter != null)
+                {
+                    GeneratePropertyGetter(irClass, prop);
+                    WriteLine();
+                }
+                if (prop.Setter != null)
+                {
+                    GeneratePropertySetter(irClass, prop);
+                    WriteLine();
+                }
+            }
+        }
+
+        private void GenerateConstructor(IRClass irClass, IRConstructor ctor)
+        {
+            var className = SanitizeLLVMName(irClass.Name);
+            var structType = _classStructTypes.GetValueOrDefault(irClass.Name, $"%class.{className}");
+
+            _currentFunction = ctor.Implementation;
+            _llvmNames.Clear();
+            _declaredIdentifiers.Clear();
+            _tempCounter = 0;
+
+            // Constructor returns pointer to the class
+            var paramList = new List<string>();
+            if (ctor.Implementation != null)
+            {
+                foreach (var param in ctor.Implementation.Parameters)
+                {
+                    _declaredIdentifiers.Add(param.Name);
+                    paramList.Add($"{MapType(param.Type)} %{SanitizeLLVMName(param.Name)}");
+                }
+            }
+
+            WriteLine($"define {structType}* @{className}_ctor({string.Join(", ", paramList)}) {{");
+            WriteLine("entry:");
+
+            // Allocate the object on heap (simplified: using alloca for demo)
+            WriteLine($"  %this = alloca {structType}");
+
+            // Allocate parameter addresses
+            if (ctor.Implementation != null)
+            {
+                foreach (var param in ctor.Implementation.Parameters)
+                {
+                    var paramType = MapType(param.Type);
+                    var paramName = SanitizeLLVMName(param.Name);
+                    WriteLine($"  %{paramName}.addr = alloca {paramType}");
+                    WriteLine($"  store {paramType} %{paramName}, {paramType}* %{paramName}.addr");
+                }
+
+                // Process constructor body
+                foreach (var local in ctor.Implementation.LocalVariables)
+                {
+                    _declaredIdentifiers.Add(local.Name);
+                    var localType = MapType(local.Type);
+                    var localName = SanitizeLLVMName(local.Name);
+                    WriteLine($"  %{localName}.addr = alloca {localType}");
+                    var defaultVal = GetDefaultValue(local.Type, localType);
+                    WriteLine($"  store {localType} {defaultVal}, {localType}* %{localName}.addr");
+                }
+
+                if (ctor.Implementation.EntryBlock != null)
+                {
+                    var visited = new HashSet<BasicBlock>();
+                    GenerateBasicBlock(ctor.Implementation.EntryBlock, visited, isEntry: true);
+                }
+            }
+
+            WriteLine($"  ret {structType}* %this");
+            WriteLine("}");
+        }
+
+        private void GenerateMethod(IRClass irClass, IRMethod method)
+        {
+            var className = SanitizeLLVMName(irClass.Name);
+            var methodName = SanitizeLLVMName(method.Name);
+            var structType = _classStructTypes.GetValueOrDefault(irClass.Name, $"%class.{className}");
+            var returnType = MapType(method.ReturnType);
+
+            _currentFunction = method.Implementation;
+            _llvmNames.Clear();
+            _declaredIdentifiers.Clear();
+            _tempCounter = 0;
+
+            // Build parameter list with 'this' pointer for instance methods
+            var paramList = new List<string>();
+            if (!method.IsStatic)
+            {
+                paramList.Add($"{structType}* %this");
+            }
+
+            if (method.Implementation != null)
+            {
+                foreach (var param in method.Implementation.Parameters)
+                {
+                    _declaredIdentifiers.Add(param.Name);
+                    paramList.Add($"{MapType(param.Type)} %{SanitizeLLVMName(param.Name)}");
+                }
+            }
+
+            WriteLine($"define {returnType} @{className}_{methodName}({string.Join(", ", paramList)}) {{");
+            WriteLine("entry:");
+
+            if (method.Implementation != null)
+            {
+                // Allocate parameter addresses
+                foreach (var param in method.Implementation.Parameters)
+                {
+                    var paramType = MapType(param.Type);
+                    var paramName = SanitizeLLVMName(param.Name);
+                    WriteLine($"  %{paramName}.addr = alloca {paramType}");
+                    WriteLine($"  store {paramType} %{paramName}, {paramType}* %{paramName}.addr");
+                }
+
+                // Allocate locals
+                foreach (var local in method.Implementation.LocalVariables)
+                {
+                    _declaredIdentifiers.Add(local.Name);
+                    var localType = MapType(local.Type);
+                    var localName = SanitizeLLVMName(local.Name);
+                    WriteLine($"  %{localName}.addr = alloca {localType}");
+                    var defaultVal = GetDefaultValue(local.Type, localType);
+                    WriteLine($"  store {localType} {defaultVal}, {localType}* %{localName}.addr");
+                }
+
+                if (method.Implementation.EntryBlock != null)
+                {
+                    var visited = new HashSet<BasicBlock>();
+                    GenerateBasicBlock(method.Implementation.EntryBlock, visited, isEntry: true);
+                }
+            }
+
+            // Ensure return for void functions
+            if (returnType == "void" && !EndsWithTerminator())
+            {
+                WriteLine("  ret void");
+            }
+
+            WriteLine("}");
+        }
+
+        private void GeneratePropertyGetter(IRClass irClass, IRProperty prop)
+        {
+            var className = SanitizeLLVMName(irClass.Name);
+            var propName = SanitizeLLVMName(prop.Name);
+            var structType = _classStructTypes.GetValueOrDefault(irClass.Name, $"%class.{className}");
+            var returnType = MapType(prop.Type);
+
+            _currentFunction = prop.Getter;
+            _llvmNames.Clear();
+            _declaredIdentifiers.Clear();
+            _tempCounter = 0;
+
+            var paramList = prop.IsStatic ? "" : $"{structType}* %this";
+            WriteLine($"define {returnType} @{className}_get_{propName}({paramList}) {{");
+            WriteLine("entry:");
+
+            if (prop.Getter?.EntryBlock != null)
+            {
+                foreach (var local in prop.Getter.LocalVariables)
+                {
+                    _declaredIdentifiers.Add(local.Name);
+                    var localType = MapType(local.Type);
+                    var localName = SanitizeLLVMName(local.Name);
+                    WriteLine($"  %{localName}.addr = alloca {localType}");
+                }
+
+                var visited = new HashSet<BasicBlock>();
+                GenerateBasicBlock(prop.Getter.EntryBlock, visited, isEntry: true);
+            }
+
+            WriteLine("}");
+        }
+
+        private void GeneratePropertySetter(IRClass irClass, IRProperty prop)
+        {
+            var className = SanitizeLLVMName(irClass.Name);
+            var propName = SanitizeLLVMName(prop.Name);
+            var structType = _classStructTypes.GetValueOrDefault(irClass.Name, $"%class.{className}");
+            var valueType = MapType(prop.Type);
+
+            _currentFunction = prop.Setter;
+            _llvmNames.Clear();
+            _declaredIdentifiers.Clear();
+            _tempCounter = 0;
+
+            var paramList = prop.IsStatic
+                ? $"{valueType} %value"
+                : $"{structType}* %this, {valueType} %value";
+
+            WriteLine($"define void @{className}_set_{propName}({paramList}) {{");
+            WriteLine("entry:");
+
+            if (prop.Setter?.EntryBlock != null)
+            {
+                foreach (var local in prop.Setter.LocalVariables)
+                {
+                    _declaredIdentifiers.Add(local.Name);
+                    var localType = MapType(local.Type);
+                    var localName = SanitizeLLVMName(local.Name);
+                    WriteLine($"  %{localName}.addr = alloca {localType}");
+                }
+
+                var visited = new HashSet<BasicBlock>();
+                GenerateBasicBlock(prop.Setter.EntryBlock, visited, isEntry: true);
+            }
+
+            if (!EndsWithTerminator())
+            {
+                WriteLine("  ret void");
+            }
+
+            WriteLine("}");
         }
 
         private void CollectStringConstants(IRModule module)
@@ -184,6 +612,35 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             WriteLine("declare i32 @rand()");
             WriteLine("declare void @srand(i32)");
             WriteLine("declare i64 @time(i64*)");
+            WriteLine();
+
+            // String functions
+            WriteLine("; String functions");
+            WriteLine("declare i64 @strlen(i8*)");
+            WriteLine("declare i8* @strcpy(i8*, i8*)");
+            WriteLine("declare i8* @strcat(i8*, i8*)");
+            WriteLine("declare i8* @malloc(i64)");
+            WriteLine("declare void @free(i8*)");
+            WriteLine();
+
+            // Generate helper for string concatenation
+            GenerateStringConcatHelper();
+        }
+
+        private void GenerateStringConcatHelper()
+        {
+            WriteLine("; String concatenation helper");
+            WriteLine("define i8* @__concat_strings(i8* %s1, i8* %s2) {");
+            WriteLine("entry:");
+            WriteLine("  %len1 = call i64 @strlen(i8* %s1)");
+            WriteLine("  %len2 = call i64 @strlen(i8* %s2)");
+            WriteLine("  %total = add i64 %len1, %len2");
+            WriteLine("  %total1 = add i64 %total, 1");
+            WriteLine("  %buf = call i8* @malloc(i64 %total1)");
+            WriteLine("  call i8* @strcpy(i8* %buf, i8* %s1)");
+            WriteLine("  call i8* @strcat(i8* %buf, i8* %s2)");
+            WriteLine("  ret i8* %buf");
+            WriteLine("}");
             WriteLine();
         }
 
@@ -433,6 +890,20 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             // Load values if they're addresses
             leftVal = LoadIfNeeded(binaryOp.Left, leftVal);
             rightVal = LoadIfNeeded(binaryOp.Right, rightVal);
+
+            // Handle string concatenation specially
+            if (binaryOp.Operation == BinaryOpKind.Concat)
+            {
+                WriteLine($"  {result} = call i8* @__concat_strings(i8* {leftVal}, i8* {rightVal})");
+
+                // If this is assigned to a declared variable, store it
+                if (IsNamedDestination(binaryOp))
+                {
+                    var varName = SanitizeLLVMName(binaryOp.Name);
+                    WriteLine($"  store i8* {result}, i8** %{varName}.addr");
+                }
+                return;
+            }
 
             string op;
             if (IsFloatType(binaryOp.Type))
@@ -942,32 +1413,174 @@ namespace BasicLang.Compiler.CodeGen.LLVM
 
         public override void Visit(IRNewObject newObj)
         {
-            // LLVM OOP requires struct allocation
-            WriteLine($"  ; new {newObj.ClassName}() - LLVM OOP not fully supported");
+            var className = SanitizeLLVMName(newObj.ClassName);
+            var structType = _classStructTypes.GetValueOrDefault(newObj.ClassName, $"%class.{className}");
+            var result = GetLLVMName(newObj);
+
+            // Build constructor arguments
+            var args = new List<string>();
+            foreach (var arg in newObj.Arguments)
+            {
+                var argVal = GetLLVMName(arg);
+                argVal = LoadIfNeeded(arg, argVal);
+                var argType = MapType(arg.Type);
+                args.Add($"{argType} {argVal}");
+            }
+
+            var argList = string.Join(", ", args);
+
+            // Call constructor
+            WriteLine($"  {result} = call {structType}* @{className}_ctor({argList})");
+
+            // Store to variable if named destination
+            if (IsNamedDestination(newObj))
+            {
+                var varName = SanitizeLLVMName(newObj.Name);
+                WriteLine($"  store {structType}* {result}, {structType}** %{varName}.addr");
+            }
         }
 
         public override void Visit(IRInstanceMethodCall methodCall)
         {
-            // LLVM would need vtable dispatch
-            WriteLine($"  ; {methodCall.Object?.Name}.{methodCall.MethodName}() - LLVM method calls not fully supported");
+            var className = methodCall.Object?.Type?.Name ?? "Unknown";
+            var sanitizedClassName = SanitizeLLVMName(className);
+            var methodName = SanitizeLLVMName(methodCall.MethodName);
+            var structType = _classStructTypes.GetValueOrDefault(className, $"%class.{sanitizedClassName}");
+            var returnType = MapType(methodCall.Type);
+
+            // Get object pointer
+            var objVal = GetLLVMName(methodCall.Object);
+            objVal = LoadIfNeeded(methodCall.Object, objVal);
+
+            // Build arguments (this + actual args)
+            var args = new List<string> { $"{structType}* {objVal}" };
+            foreach (var arg in methodCall.Arguments)
+            {
+                var argVal = GetLLVMName(arg);
+                argVal = LoadIfNeeded(arg, argVal);
+                var argType = MapType(arg.Type);
+                args.Add($"{argType} {argVal}");
+            }
+
+            var argList = string.Join(", ", args);
+            var hasReturn = methodCall.Type != null && !methodCall.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+            if (hasReturn)
+            {
+                var result = GetLLVMName(methodCall);
+                WriteLine($"  {result} = call {returnType} @{sanitizedClassName}_{methodName}({argList})");
+
+                if (IsNamedDestination(methodCall))
+                {
+                    var varName = SanitizeLLVMName(methodCall.Name);
+                    WriteLine($"  store {returnType} {result}, {returnType}* %{varName}.addr");
+                }
+            }
+            else
+            {
+                WriteLine($"  call {returnType} @{sanitizedClassName}_{methodName}({argList})");
+            }
         }
 
         public override void Visit(IRBaseMethodCall baseCall)
         {
-            // LLVM doesn't have base class concept directly
-            WriteLine($"  ; base.{baseCall.MethodName}() - LLVM base calls not supported");
+            // For base calls, we call the parent class method directly
+            // We need to determine the base class from the current context
+            var methodName = SanitizeLLVMName(baseCall.MethodName);
+            var returnType = MapType(baseCall.Type);
+
+            // Build arguments
+            var args = new List<string> { "i8* %this" };  // Simplified this pointer
+            foreach (var arg in baseCall.Arguments)
+            {
+                var argVal = GetLLVMName(arg);
+                argVal = LoadIfNeeded(arg, argVal);
+                var argType = MapType(arg.Type);
+                args.Add($"{argType} {argVal}");
+            }
+
+            var argList = string.Join(", ", args);
+            var hasReturn = baseCall.Type != null && !baseCall.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+            // Generate comment for now since we don't track base class in IR
+            WriteLine($"  ; base.{baseCall.MethodName}() call");
+            if (hasReturn)
+            {
+                var result = GetLLVMName(baseCall);
+                WriteLine($"  {result} = call {returnType} @Base_{methodName}({argList})");
+            }
+            else
+            {
+                WriteLine($"  call {returnType} @Base_{methodName}({argList})");
+            }
         }
 
         public override void Visit(IRFieldAccess fieldAccess)
         {
-            // LLVM would need GEP for struct field access
-            WriteLine($"  ; {fieldAccess.Object?.Name}.{fieldAccess.FieldName} - LLVM field access not fully supported");
+            var className = fieldAccess.Object?.Type?.Name ?? "Unknown";
+            var sanitizedClassName = SanitizeLLVMName(className);
+            var fieldName = fieldAccess.FieldName;
+            var structType = _classStructTypes.GetValueOrDefault(className, $"%class.{sanitizedClassName}");
+            var fieldType = MapType(fieldAccess.Type);
+
+            // Get field index
+            var fieldIndex = 0;
+            if (_classFieldIndices.TryGetValue(className, out var indices) && indices.TryGetValue(fieldName, out var idx))
+            {
+                fieldIndex = idx;
+            }
+
+            // Get object pointer
+            var objVal = GetLLVMName(fieldAccess.Object);
+            objVal = LoadIfNeeded(fieldAccess.Object, objVal);
+
+            var result = GetLLVMName(fieldAccess);
+            var gepResult = $"%t{_tempCounter++}";
+
+            // GEP to get field pointer
+            WriteLine($"  {gepResult} = getelementptr inbounds {structType}, {structType}* {objVal}, i32 0, i32 {fieldIndex}");
+
+            // Load the field value
+            WriteLine($"  {result} = load {fieldType}, {fieldType}* {gepResult}");
+
+            // Store to variable if named destination
+            if (IsNamedDestination(fieldAccess))
+            {
+                var varName = SanitizeLLVMName(fieldAccess.Name);
+                WriteLine($"  store {fieldType} {result}, {fieldType}* %{varName}.addr");
+            }
         }
 
         public override void Visit(IRFieldStore fieldStore)
         {
-            // LLVM would need GEP for struct field store
-            WriteLine($"  ; {fieldStore.Object?.Name}.{fieldStore.FieldName} = {fieldStore.Value?.Name} - LLVM field store not fully supported");
+            var className = fieldStore.Object?.Type?.Name ?? "Unknown";
+            var sanitizedClassName = SanitizeLLVMName(className);
+            var fieldName = fieldStore.FieldName;
+            var structType = _classStructTypes.GetValueOrDefault(className, $"%class.{sanitizedClassName}");
+            var fieldType = MapType(fieldStore.Value?.Type);
+
+            // Get field index
+            var fieldIndex = 0;
+            if (_classFieldIndices.TryGetValue(className, out var indices) && indices.TryGetValue(fieldName, out var idx))
+            {
+                fieldIndex = idx;
+            }
+
+            // Get object pointer
+            var objVal = GetLLVMName(fieldStore.Object);
+            objVal = LoadIfNeeded(fieldStore.Object, objVal);
+
+            // Get value to store
+            var value = GetLLVMName(fieldStore.Value);
+            value = LoadIfNeeded(fieldStore.Value, value);
+
+            var gepResult = $"%t{_tempCounter++}";
+
+            // GEP to get field pointer
+            WriteLine($"  {gepResult} = getelementptr inbounds {structType}, {structType}* {objVal}, i32 0, i32 {fieldIndex}");
+
+            // Store the value
+            WriteLine($"  store {fieldType} {value}, {fieldType}* {gepResult}");
         }
 
         #endregion

@@ -12,15 +12,27 @@ namespace BasicLang.Compiler
     {
         private readonly List<Token> _tokens;
         private int _current;
+        private readonly List<ParseError> _errors;
+        private readonly Stack<string> _context;
+        private const int MaxErrors = 100;
+        private bool _panicMode;
 
         public Parser(List<Token> tokens)
         {
             _tokens = tokens ?? throw new ArgumentNullException(nameof(tokens));
             _current = 0;
+            _errors = new List<ParseError>();
+            _context = new Stack<string>();
+            _panicMode = false;
 
             // Remove comments and filter unnecessary tokens
             _tokens = _tokens.Where(t => t.Type != TokenType.Comment).ToList();
         }
+
+        /// <summary>
+        /// Gets all parsing errors collected during parsing
+        /// </summary>
+        public IReadOnlyList<ParseError> Errors => _errors.AsReadOnly();
 
         /// <summary>
         /// Parse the token stream into an AST
@@ -36,10 +48,19 @@ namespace BasicLang.Compiler
                 if (IsAtEnd())
                     break;
 
-                var declaration = ParseTopLevelDeclaration();
-                if (declaration != null)
+                try
                 {
-                    program.Declarations.Add(declaration);
+                    var declaration = ParseTopLevelDeclaration();
+                    if (declaration != null)
+                    {
+                        program.Declarations.Add(declaration);
+                    }
+                }
+                catch (ParseException ex)
+                {
+                    // Record error and attempt recovery
+                    RecordError(ex.Message, ex.Token, ex.Suggestion);
+                    Synchronize();
                 }
 
                 SkipNewlines();
@@ -84,6 +105,18 @@ namespace BasicLang.Compiler
                 return ParseExtern();
             if (Check(TokenType.Extension))
                 return ParseExtensionMethod();
+            // Handle MustInherit modifier for classes
+            if (Check(TokenType.MustInherit))
+            {
+                Advance(); // consume MustInherit
+                if (Check(TokenType.Class))
+                {
+                    var cls = ParseClass();
+                    cls.IsAbstract = true;
+                    return cls;
+                }
+                throw new ParseException("Expected 'Class' after 'MustInherit'", Peek());
+            }
             // Handle Async/Iterator modifiers for top-level functions/subs
             if (Check(TokenType.Async) || Check(TokenType.Iterator))
             {
@@ -132,19 +165,37 @@ namespace BasicLang.Compiler
             var node = new NamespaceNode(token.Line, token.Column);
 
             node.Name = Consume(TokenType.Identifier, "Expected namespace name").Lexeme;
-            ConsumeNewlines();
+            _context.Push($"Namespace '{node.Name}'");
 
-            while (!Check(TokenType.EndNamespace) && !IsAtEnd())
+            try
             {
-                var member = ParseTopLevelDeclaration();
-                if (member != null)
+                ConsumeNewlines();
+
+                while (!Check(TokenType.EndNamespace) && !IsAtEnd())
                 {
-                    node.Members.Add(member);
+                    try
+                    {
+                        var member = ParseTopLevelDeclaration();
+                        if (member != null)
+                        {
+                            node.Members.Add(member);
+                        }
+                    }
+                    catch (ParseException ex)
+                    {
+                        RecordError(ex.Message, ex.Token, ex.Suggestion);
+                        Synchronize();
+                    }
+                    SkipNewlines();
                 }
-                SkipNewlines();
+
+                Consume(TokenType.EndNamespace, "Expected 'End Namespace'");
+            }
+            finally
+            {
+                _context.Pop();
             }
 
-            Consume(TokenType.EndNamespace, "Expected 'End Namespace'");
             return node;
         }
 
@@ -261,48 +312,65 @@ namespace BasicLang.Compiler
             var node = new ClassNode(token.Line, token.Column);
 
             node.Name = Consume(TokenType.Identifier, "Expected class name").Lexeme;
+            _context.Push($"Class '{node.Name}'");
 
-            // Generic parameters
-            if (Match(TokenType.LeftParen) && Check(TokenType.Of))
+            try
             {
-                Consume(TokenType.Of, "Expected 'Of'");
-                do
+                // Generic parameters
+                if (Match(TokenType.LeftParen) && Check(TokenType.Of))
                 {
-                    node.GenericParameters.Add(Consume(TokenType.Identifier, "Expected type parameter").Lexeme);
-                } while (Match(TokenType.Comma));
+                    Consume(TokenType.Of, "Expected 'Of'");
+                    do
+                    {
+                        node.GenericParameters.Add(Consume(TokenType.Identifier, "Expected type parameter").Lexeme);
+                    } while (Match(TokenType.Comma));
 
-                Consume(TokenType.RightParen, "Expected ')' after generic parameters");
-            }
-
-            // Inheritance
-            if (Match(TokenType.Inherits))
-            {
-                node.BaseClass = Consume(TokenType.Identifier, "Expected base class name").Lexeme;
-            }
-
-            // Interfaces
-            if (Match(TokenType.Implements))
-            {
-                do
-                {
-                    node.Interfaces.Add(Consume(TokenType.Identifier, "Expected interface name").Lexeme);
-                } while (Match(TokenType.Comma));
-            }
-
-            ConsumeNewlines();
-
-            // Class members
-            while (!Check(TokenType.EndClass) && !IsAtEnd())
-            {
-                var member = ParseClassMember();
-                if (member != null)
-                {
-                    node.Members.Add(member);
+                    Consume(TokenType.RightParen, "Expected ')' after generic parameters");
                 }
-                SkipNewlines();
+
+                // Inheritance
+                if (Match(TokenType.Inherits))
+                {
+                    node.BaseClass = Consume(TokenType.Identifier, "Expected base class name").Lexeme;
+                }
+
+                // Interfaces
+                if (Match(TokenType.Implements))
+                {
+                    do
+                    {
+                        node.Interfaces.Add(Consume(TokenType.Identifier, "Expected interface name").Lexeme);
+                    } while (Match(TokenType.Comma));
+                }
+
+                ConsumeNewlines();
+
+                // Class members
+                while (!Check(TokenType.EndClass) && !IsAtEnd())
+                {
+                    try
+                    {
+                        var member = ParseClassMember();
+                        if (member != null)
+                        {
+                            node.Members.Add(member);
+                        }
+                    }
+                    catch (ParseException ex)
+                    {
+                        RecordError(ex.Message, ex.Token, ex.Suggestion);
+                        Synchronize();
+                    }
+                    SkipNewlines();
+                }
+
+                Consume(TokenType.EndClass, "Expected 'End Class'");
+            }
+            finally
+            {
+                _context.Pop();
             }
 
-            Consume(TokenType.EndClass, "Expected 'End Class'");
             return node;
         }
 
@@ -458,6 +526,7 @@ namespace BasicLang.Compiler
                 sub.IsStatic = isStatic;
                 sub.IsVirtual = isVirtual;
                 sub.IsOverride = isOverride;
+                sub.IsAbstract = isAbstract;
                 sub.IsSealed = isSealed;
                 sub.IsAsync = isAsync;
                 return sub;
@@ -1317,53 +1386,61 @@ namespace BasicLang.Compiler
             var node = new FunctionNode(token.Line, token.Column);
 
             node.Name = Consume(TokenType.Identifier, "Expected function name").Lexeme;
+            _context.Push($"Function '{node.Name}'");
 
-            // Generic type parameters: Function Foo(Of T, U)(...)
-            if (Check(TokenType.LeftParen) && PeekNext().Type == TokenType.Of)
+            try
             {
-                Advance(); // consume '('
-                Consume(TokenType.Of, "Expected 'Of'");
-                do
+                // Generic type parameters: Function Foo(Of T, U)(...)
+                if (Check(TokenType.LeftParen) && PeekNext().Type == TokenType.Of)
                 {
-                    node.GenericParameters.Add(Consume(TokenType.Identifier, "Expected type parameter").Lexeme);
-                } while (Match(TokenType.Comma));
-                Consume(TokenType.RightParen, "Expected ')' after generic parameters");
-            }
-
-            // Parameters
-            if (Match(TokenType.LeftParen))
-            {
-                if (!Check(TokenType.RightParen))
-                {
+                    Advance(); // consume '('
+                    Consume(TokenType.Of, "Expected 'Of'");
                     do
                     {
-                        node.Parameters.Add(ParseParameter());
+                        node.GenericParameters.Add(Consume(TokenType.Identifier, "Expected type parameter").Lexeme);
                     } while (Match(TokenType.Comma));
+                    Consume(TokenType.RightParen, "Expected ')' after generic parameters");
                 }
-                Consume(TokenType.RightParen, "Expected ')' after parameters");
+
+                // Parameters
+                if (Match(TokenType.LeftParen))
+                {
+                    if (!Check(TokenType.RightParen))
+                    {
+                        do
+                        {
+                            node.Parameters.Add(ParseParameter());
+                        } while (Match(TokenType.Comma));
+                    }
+                    Consume(TokenType.RightParen, "Expected ')' after parameters");
+                }
+
+                // Return type
+                if (Match(TokenType.As))
+                {
+                    node.ReturnType = ParseTypeReference();
+                }
+
+                // Implements clause
+                if (Match(TokenType.Implements))
+                {
+                    node.ImplementsInterface = Consume(TokenType.Identifier, "Expected interface name").Lexeme;
+                    Consume(TokenType.Dot, "Expected '.'");
+                    node.ImplementsInterface += "." + Consume(TokenType.Identifier, "Expected method name").Lexeme;
+                }
+
+                ConsumeNewlines();
+
+                // Body (if not abstract)
+                if (!node.IsAbstract)
+                {
+                    node.Body = ParseBlock(TokenType.EndFunction);
+                    Consume(TokenType.EndFunction, "Expected 'End Function'");
+                }
             }
-
-            // Return type
-            if (Match(TokenType.As))
+            finally
             {
-                node.ReturnType = ParseTypeReference();
-            }
-
-            // Implements clause
-            if (Match(TokenType.Implements))
-            {
-                node.ImplementsInterface = Consume(TokenType.Identifier, "Expected interface name").Lexeme;
-                Consume(TokenType.Dot, "Expected '.'");
-                node.ImplementsInterface += "." + Consume(TokenType.Identifier, "Expected method name").Lexeme;
-            }
-
-            ConsumeNewlines();
-
-            // Body (if not abstract)
-            if (!node.IsAbstract)
-            {
-                node.Body = ParseBlock(TokenType.EndFunction);
-                Consume(TokenType.EndFunction, "Expected 'End Function'");
+                _context.Pop();
             }
 
             return node;
@@ -1375,43 +1452,51 @@ namespace BasicLang.Compiler
             var node = new SubroutineNode(token.Line, token.Column);
 
             node.Name = Consume(TokenType.Identifier, "Expected subroutine name").Lexeme;
+            _context.Push($"Sub '{node.Name}'");
 
-            // Generic type parameters: Sub Foo(Of T, U)(...)
-            if (Check(TokenType.LeftParen) && PeekNext().Type == TokenType.Of)
+            try
             {
-                Advance(); // consume '('
-                Consume(TokenType.Of, "Expected 'Of'");
-                do
+                // Generic type parameters: Sub Foo(Of T, U)(...)
+                if (Check(TokenType.LeftParen) && PeekNext().Type == TokenType.Of)
                 {
-                    node.GenericParameters.Add(Consume(TokenType.Identifier, "Expected type parameter").Lexeme);
-                } while (Match(TokenType.Comma));
-                Consume(TokenType.RightParen, "Expected ')' after generic parameters");
-            }
-
-            // Parameters
-            if (Match(TokenType.LeftParen))
-            {
-                if (!Check(TokenType.RightParen))
-                {
+                    Advance(); // consume '('
+                    Consume(TokenType.Of, "Expected 'Of'");
                     do
                     {
-                        node.Parameters.Add(ParseParameter());
+                        node.GenericParameters.Add(Consume(TokenType.Identifier, "Expected type parameter").Lexeme);
                     } while (Match(TokenType.Comma));
+                    Consume(TokenType.RightParen, "Expected ')' after generic parameters");
                 }
-                Consume(TokenType.RightParen, "Expected ')' after parameters");
-            }
 
-            // Implements clause
-            if (Match(TokenType.Implements))
+                // Parameters
+                if (Match(TokenType.LeftParen))
+                {
+                    if (!Check(TokenType.RightParen))
+                    {
+                        do
+                        {
+                            node.Parameters.Add(ParseParameter());
+                        } while (Match(TokenType.Comma));
+                    }
+                    Consume(TokenType.RightParen, "Expected ')' after parameters");
+                }
+
+                // Implements clause
+                if (Match(TokenType.Implements))
+                {
+                    node.ImplementsInterface = Consume(TokenType.Identifier, "Expected interface name").Lexeme;
+                    Consume(TokenType.Dot, "Expected '.'");
+                    node.ImplementsInterface += "." + Consume(TokenType.Identifier, "Expected method name").Lexeme;
+                }
+
+                ConsumeNewlines();
+                node.Body = ParseBlock(TokenType.EndSub);
+                Consume(TokenType.EndSub, "Expected 'End Sub'");
+            }
+            finally
             {
-                node.ImplementsInterface = Consume(TokenType.Identifier, "Expected interface name").Lexeme;
-                Consume(TokenType.Dot, "Expected '.'");
-                node.ImplementsInterface += "." + Consume(TokenType.Identifier, "Expected method name").Lexeme;
+                _context.Pop();
             }
-
-            ConsumeNewlines();
-            node.Body = ParseBlock(TokenType.EndSub);
-            Consume(TokenType.EndSub, "Expected 'End Sub'");
 
             return node;
         }
@@ -1420,6 +1505,28 @@ namespace BasicLang.Compiler
         {
             var token = Peek();
             var node = new ParameterNode(token.Line, token.Column);
+
+            // Check for Optional keyword
+            if (Match(TokenType.Optional))
+            {
+                node.IsOptional = true;
+            }
+
+            // Check for ParamArray keyword
+            if (Match(TokenType.ParamArray))
+            {
+                node.IsParamArray = true;
+            }
+
+            // Check for ByVal/ByRef keywords
+            if (Match(TokenType.ByRef))
+            {
+                node.IsByRef = true;
+            }
+            else if (Match(TokenType.ByVal))
+            {
+                node.IsByRef = false; // Explicitly ByVal (default)
+            }
 
             node.Name = Consume(TokenType.Identifier, "Expected parameter name").Lexeme;
 
@@ -1461,10 +1568,22 @@ namespace BasicLang.Compiler
                 node.Type.ArrayDimensions = arrayDimensions;
             }
 
-            // Default value
+            // ParamArray parameters must be array types
+            if (node.IsParamArray && !node.Type.IsArray)
+            {
+                node.Type.IsArray = true;
+                node.Type.ArrayDimensions = new List<int> { -1 };
+            }
+
+            // Default value (required for Optional, not allowed for ParamArray)
             if (Match(TokenType.Assignment))
             {
                 node.DefaultValue = ParseExpression();
+                // If has default value, treat as optional
+                if (!node.IsOptional && !node.IsParamArray)
+                {
+                    node.IsOptional = true;
+                }
             }
 
             return node;
@@ -1828,7 +1947,8 @@ namespace BasicLang.Compiler
             }
             else
             {
-                throw new ParseException("Expected 'Then' after if condition", Peek());
+                throw new ParseException("Expected 'Then' after If condition", Peek(),
+                    "Did you forget 'Then' after the If condition?");
             }
 
             return node;
@@ -1844,10 +1964,22 @@ namespace BasicLang.Compiler
                 if (endTokens.Any(t => Check(t)) || IsAtEnd())
                     break;
 
-                var statement = ParseStatement();
-                if (statement != null)
+                try
                 {
-                    block.Statements.Add(statement);
+                    var statement = ParseStatement();
+                    if (statement != null)
+                    {
+                        block.Statements.Add(statement);
+                    }
+                }
+                catch (ParseException ex)
+                {
+                    RecordError(ex.Message, ex.Token, ex.Suggestion);
+                    Synchronize();
+
+                    // If we've synchronized to an end token, break out
+                    if (endTokens.Any(t => Check(t)))
+                        break;
                 }
 
                 SkipNewlines();
@@ -2521,6 +2653,16 @@ namespace BasicLang.Compiler
 
         private ExpressionNode ParsePrimary()
         {
+            // Implicit With member access: .Member inside a With block
+            if (Check(TokenType.Dot))
+            {
+                var dotToken = Advance();
+                var memberToken = Consume(TokenType.Identifier, "Expected member name after '.'");
+                var node = new ImplicitWithMemberNode(dotToken.Line, dotToken.Column);
+                node.MemberName = memberToken.Lexeme;
+                return node;
+            }
+
             // Literals
             if (Check(TokenType.IntegerLiteral) || Check(TokenType.LongLiteral) ||
                 Check(TokenType.SingleLiteral) || Check(TokenType.DoubleLiteral) ||
@@ -2580,6 +2722,12 @@ namespace BasicLang.Compiler
                 var awaitExpr = new AwaitExpressionNode(token.Line, token.Column);
                 awaitExpr.Expression = ParseUnary();  // Parse the expression to await
                 return awaitExpr;
+            }
+
+            // LINQ query expression: From x In collection Where x > 0 Select x
+            if (Check(TokenType.From))
+            {
+                return ParseLinqQuery();
             }
 
             // Lambda expression: Function(x) expr or Sub(x) statement
@@ -2749,6 +2897,85 @@ namespace BasicLang.Compiler
             return lambda;
         }
 
+        private LinqQueryExpressionNode ParseLinqQuery()
+        {
+            var token = Consume(TokenType.From, "Expected 'From'");
+            var query = new LinqQueryExpressionNode(token.Line, token.Column);
+
+            // From clause: From x In collection
+            var fromClause = new FromClause { Line = token.Line, Column = token.Column };
+            fromClause.VariableName = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
+            Consume(TokenType.In, "Expected 'In' after variable name");
+            fromClause.Collection = ParseExpression();
+            query.Clauses.Add(fromClause);
+
+            // Parse additional clauses
+            while (true)
+            {
+                if (Check(TokenType.Where))
+                {
+                    Advance();
+                    var whereClause = new WhereClause { Line = Previous().Line, Column = Previous().Column };
+                    whereClause.Condition = ParseExpression();
+                    query.Clauses.Add(whereClause);
+                }
+                else if (Check(TokenType.OrderBy))
+                {
+                    Advance();
+                    var orderByClause = new OrderByClause { Line = Previous().Line, Column = Previous().Column };
+                    orderByClause.KeySelector = ParseExpression();
+                    if (Match(TokenType.Descending))
+                        orderByClause.Descending = true;
+                    else
+                        Match(TokenType.Ascending);  // Optional Ascending
+                    query.Clauses.Add(orderByClause);
+                }
+                else if (Check(TokenType.Select))
+                {
+                    Advance();
+                    var selectClause = new SelectClause { Line = Previous().Line, Column = Previous().Column };
+                    selectClause.Selector = ParseExpression();
+                    query.Clauses.Add(selectClause);
+                    break;  // Select is always the final clause
+                }
+                else if (Check(TokenType.Take))
+                {
+                    Advance();
+                    var takeClause = new TakeClause { Line = Previous().Line, Column = Previous().Column };
+                    takeClause.Count = ParseExpression();
+                    query.Clauses.Add(takeClause);
+                }
+                else if (Check(TokenType.Skip))
+                {
+                    Advance();
+                    var skipClause = new SkipClause { Line = Previous().Line, Column = Previous().Column };
+                    skipClause.Count = ParseExpression();
+                    query.Clauses.Add(skipClause);
+                }
+                else if (Check(TokenType.Distinct))
+                {
+                    Advance();
+                    var distinctClause = new DistinctClause { Line = Previous().Line, Column = Previous().Column };
+                    query.Clauses.Add(distinctClause);
+                }
+                else if (Check(TokenType.Let))
+                {
+                    Advance();
+                    var letClause = new LetClause { Line = Previous().Line, Column = Previous().Column };
+                    letClause.VariableName = Consume(TokenType.Identifier, "Expected variable name after Let").Lexeme;
+                    Consume(TokenType.Assignment, "Expected '=' after variable name");
+                    letClause.Value = ParseExpression();
+                    query.Clauses.Add(letClause);
+                }
+                else
+                {
+                    break;  // No more clauses
+                }
+            }
+
+            return query;
+        }
+
         // ====================================================================
         // Utility Methods
         // ====================================================================
@@ -2819,7 +3046,62 @@ namespace BasicLang.Compiler
         private Token Consume(TokenType type, string message)
         {
             if (Check(type)) return Advance();
-            throw new ParseException(message + $" but found {Peek().Type}", Peek());
+
+            // Generate suggestion based on expected token type
+            string suggestion = GetSuggestionForExpectedToken(type);
+            string errorMsg = message + $" but found {Peek().Type}";
+
+            throw new ParseException(errorMsg, Peek(), suggestion);
+        }
+
+        /// <summary>
+        /// Get a helpful suggestion based on the expected token type
+        /// </summary>
+        private string GetSuggestionForExpectedToken(TokenType expected)
+        {
+            switch (expected)
+            {
+                case TokenType.Then:
+                    return "Did you forget 'Then' after the If condition?";
+                case TokenType.EndIf:
+                    return "Make sure your If statement is properly closed with 'End If'.";
+                case TokenType.EndFunction:
+                    return "Make sure your Function is properly closed with 'End Function'.";
+                case TokenType.EndSub:
+                    return "Make sure your Sub is properly closed with 'End Sub'.";
+                case TokenType.EndClass:
+                    return "Make sure your Class is properly closed with 'End Class'.";
+                case TokenType.EndNamespace:
+                    return "Make sure your Namespace is properly closed with 'End Namespace'.";
+                case TokenType.EndModule:
+                    return "Make sure your Module is properly closed with 'End Module'.";
+                case TokenType.EndSelect:
+                    return "Make sure your Select statement is properly closed with 'End Select'.";
+                case TokenType.Wend:
+                    return "Make sure your While loop is properly closed with 'Wend'.";
+                case TokenType.Loop:
+                    return "Make sure your Do loop is properly closed with 'Loop'.";
+                case TokenType.Next:
+                    return "Make sure your For loop is properly closed with 'Next'.";
+                case TokenType.RightParen:
+                    return "Did you forget a closing parenthesis ')'?";
+                case TokenType.LeftParen:
+                    return "Did you forget an opening parenthesis '('?";
+                case TokenType.RightBracket:
+                    return "Did you forget a closing bracket ']'?";
+                case TokenType.LeftBracket:
+                    return "Did you forget an opening bracket '['?";
+                case TokenType.Identifier:
+                    return "Expected an identifier (variable or function name).";
+                case TokenType.Assignment:
+                    return "Did you forget the assignment operator '='?";
+                case TokenType.As:
+                    return "Did you forget 'As' for type declaration?";
+                case TokenType.Comma:
+                    return "Multiple items should be separated by commas.";
+                default:
+                    return null;
+            }
         }
 
         private void SkipNewlines()
@@ -2843,6 +3125,104 @@ namespace BasicLang.Compiler
                 Advance();
             }
         }
+
+        // ====================================================================
+        // Error Recovery
+        // ====================================================================
+
+        /// <summary>
+        /// Record a parsing error with context information
+        /// </summary>
+        private void RecordError(string message, Token token, string suggestion = null)
+        {
+            if (_errors.Count >= MaxErrors)
+            {
+                throw new TooManyErrorsException($"Too many parse errors (>{MaxErrors}). Aborting.");
+            }
+
+            if (_panicMode)
+            {
+                // Skip recording multiple errors while in panic mode
+                return;
+            }
+
+            string contextInfo = _context.Count > 0 ? $" in {string.Join(" -> ", _context.Reverse())}" : "";
+            var error = new ParseError(message, token, contextInfo, suggestion);
+            _errors.Add(error);
+
+            _panicMode = true;
+        }
+
+        /// <summary>
+        /// Synchronize the parser to a known recovery point after an error
+        /// </summary>
+        private void Synchronize()
+        {
+            _panicMode = false;
+
+            // Skip tokens until we find a synchronization point
+            while (!IsAtEnd())
+            {
+                // After a newline, we might be at the start of a new statement
+                if (Previous().Type == TokenType.Newline)
+                {
+                    return;
+                }
+
+                // These tokens typically start new declarations or statements
+                switch (Peek().Type)
+                {
+                    // Top-level synchronization points
+                    case TokenType.Namespace:
+                    case TokenType.Module:
+                    case TokenType.Class:
+                    case TokenType.Interface:
+                    case TokenType.Enum:
+                    case TokenType.Type:
+                    case TokenType.Structure:
+                    case TokenType.Function:
+                    case TokenType.Sub:
+                    case TokenType.Dim:
+                    case TokenType.Const:
+                    case TokenType.Auto:
+
+                    // Statement synchronization points
+                    case TokenType.If:
+                    case TokenType.For:
+                    case TokenType.While:
+                    case TokenType.Do:
+                    case TokenType.Select:
+                    case TokenType.Try:
+                    case TokenType.With:
+                    case TokenType.Return:
+                    case TokenType.Exit:
+                    case TokenType.Throw:
+
+                    // End tokens (block terminators)
+                    case TokenType.EndIf:
+                    case TokenType.EndFunction:
+                    case TokenType.EndSub:
+                    case TokenType.EndClass:
+                    case TokenType.EndModule:
+                    case TokenType.EndNamespace:
+                    case TokenType.EndSelect:
+                    case TokenType.EndWhile:
+                    case TokenType.EndStructure:
+                    case TokenType.EndInterface:
+                    case TokenType.EndEnum:
+                    case TokenType.Loop:
+                    case TokenType.Next:
+                    case TokenType.Else:
+                    case TokenType.ElseIf:
+                    case TokenType.Case:
+                    case TokenType.Catch:
+                    case TokenType.Finally:
+                        return;
+                }
+
+                Advance();
+            }
+        }
     }
 
     /// <summary>
@@ -2851,15 +3231,61 @@ namespace BasicLang.Compiler
     public class ParseException : Exception
     {
         public Token Token { get; }
+        public string Suggestion { get; }
 
-        public ParseException(string message, Token token) : base(message)
+        public ParseException(string message, Token token, string suggestion = null) : base(message)
         {
             Token = token;
+            Suggestion = suggestion;
         }
 
         public override string ToString()
         {
-            return $"Parse error at line {Token.Line}, column {Token.Column}: {Message}";
+            string result = $"Parse error at line {Token.Line}, column {Token.Column}: {Message}";
+            if (!string.IsNullOrEmpty(Suggestion))
+            {
+                result += $"\n  Suggestion: {Suggestion}";
+            }
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Represents a parsing error with context information
+    /// </summary>
+    public class ParseError
+    {
+        public string Message { get; }
+        public Token Token { get; }
+        public string Context { get; }
+        public string Suggestion { get; }
+
+        public ParseError(string message, Token token, string context = null, string suggestion = null)
+        {
+            Message = message;
+            Token = token;
+            Context = context;
+            Suggestion = suggestion;
+        }
+
+        public override string ToString()
+        {
+            string result = $"Error at line {Token.Line}, column {Token.Column}{Context}: {Message}";
+            if (!string.IsNullOrEmpty(Suggestion))
+            {
+                result += $"\n  Suggestion: {Suggestion}";
+            }
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Exception thrown when too many errors are encountered
+    /// </summary>
+    public class TooManyErrorsException : Exception
+    {
+        public TooManyErrorsException(string message) : base(message)
+        {
         }
     }
 }

@@ -191,6 +191,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             RegisterStdLibFunction("LBound", SymbolKind.Function, _typeManager.GetType("Integer"),
                 new[] { ("array", _typeManager.GetType("Object")) });
+
+            // Additional Conversion Functions
+            RegisterStdLibFunction("Str", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("value", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("Val", SymbolKind.Function, _typeManager.GetType("Double"),
+                new[] { ("str", _typeManager.GetType("String")) });
         }
 
         private void RegisterStdLibFunction(string name, SymbolKind kind, TypeInfo returnType, (string name, TypeInfo type)[] parameters)
@@ -249,7 +256,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Handle array types
             if (typeRef.IsArray)
             {
-                var elementType = _typeManager.GetType(typeRef.Name);
+                var elementType = ResolveTypeName(typeRef.Name);
                 if (elementType == null)
                 {
                     Error($"Unknown type '{typeRef.Name}'", 0, 0);
@@ -269,8 +276,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return _typeManager.CreateGenericType(typeRef.Name, typeArgs);
             }
 
-            // Regular type lookup
-            var type = _typeManager.GetType(typeRef.Name);
+            // Regular type lookup (check scope for type parameters first, then type manager)
+            var type = ResolveTypeName(typeRef.Name);
             if (type == null)
             {
                 Error($"Unknown type '{typeRef.Name}'", 0, 0);
@@ -287,6 +294,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             return type;
+        }
+
+        /// <summary>
+        /// Resolves a type name by checking the current scope for type parameters first,
+        /// then falling back to the type manager.
+        /// </summary>
+        private TypeInfo ResolveTypeName(string name)
+        {
+            // First, check if it's a type parameter in the current scope
+            var symbol = _currentScope.Resolve(name);
+            if (symbol != null && symbol.Kind == SymbolKind.TypeParameter)
+            {
+                return symbol.Type;
+            }
+
+            // Fall back to the type manager
+            return _typeManager.GetType(name);
         }
 
         // ====================================================================
@@ -345,6 +369,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // Set abstract flag
+            classType.IsAbstract = node.IsAbstract;
+
             // Set base class
             if (node.BaseClass != null)
             {
@@ -392,19 +419,68 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var classScope = EnterScope(node.Name, ScopeKind.Class);
             classScope.ClassType = classType;
 
+            // Register generic type parameters in the class scope
+            foreach (var genericParam in node.GenericParameters)
+            {
+                // Create a type parameter type
+                var typeParamType = new TypeInfo(genericParam, TypeKind.TypeParameter);
+
+                // Define type parameter as a symbol in the class scope (not global type manager)
+                var typeParamSymbol = new Symbol(genericParam, SymbolKind.TypeParameter, typeParamType, node.Line, node.Column);
+                classScope.Define(typeParamSymbol);
+
+                // Track it in the class symbol
+                symbol.GenericParameters.Add(typeParamType);
+            }
+
             // Process members
+            bool hasAbstractMembers = false;
             foreach (var member in node.Members)
             {
                 member.Accept(this);
 
-                // Add member to class type
-                if (member is FunctionNode func && _nodeSymbols.TryGetValue(func, out var funcSymbol))
+                // Check for abstract methods
+                if (member is FunctionNode func)
                 {
-                    classType.Members[func.Name] = funcSymbol;
+                    if (func.IsAbstract)
+                    {
+                        hasAbstractMembers = true;
+                        // Validate: abstract methods can't have a body
+                        if (func.Body != null && func.Body.Statements.Count > 0)
+                        {
+                            Error($"Abstract method '{func.Name}' cannot have a body", func.Line, func.Column);
+                        }
+                        // Validate: abstract methods must be in abstract classes
+                        if (!node.IsAbstract)
+                        {
+                            Error($"Abstract method '{func.Name}' can only be declared in an abstract class. Mark class '{node.Name}' as MustInherit", func.Line, func.Column);
+                        }
+                    }
+                    if (_nodeSymbols.TryGetValue(func, out var funcSymbol))
+                    {
+                        classType.Members[func.Name] = funcSymbol;
+                    }
                 }
-                else if (member is SubroutineNode sub && _nodeSymbols.TryGetValue(sub, out var subSymbol))
+                else if (member is SubroutineNode sub)
                 {
-                    classType.Members[sub.Name] = subSymbol;
+                    if (sub.IsAbstract)
+                    {
+                        hasAbstractMembers = true;
+                        // Validate: abstract methods can't have a body
+                        if (sub.Body != null && sub.Body.Statements.Count > 0)
+                        {
+                            Error($"Abstract method '{sub.Name}' cannot have a body", sub.Line, sub.Column);
+                        }
+                        // Validate: abstract methods must be in abstract classes
+                        if (!node.IsAbstract)
+                        {
+                            Error($"Abstract method '{sub.Name}' can only be declared in an abstract class. Mark class '{node.Name}' as MustInherit", sub.Line, sub.Column);
+                        }
+                    }
+                    if (_nodeSymbols.TryGetValue(sub, out var subSymbol))
+                    {
+                        classType.Members[sub.Name] = subSymbol;
+                    }
                 }
                 else if (member is VariableDeclarationNode varDecl && _nodeSymbols.TryGetValue(varDecl, out var varSymbol))
                 {
@@ -415,6 +491,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     classType.Members[prop.Name] = propSymbol;
                 }
             }
+
+            // Validate: abstract classes should have at least one abstract member (warning, not error)
+            // This is not enforced in VB.NET, but it's a good practice
 
             ExitScope();
         }
@@ -439,6 +518,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
             foreach (var method in node.Methods)
             {
                 method.Accept(this);
+
+                // Validate default implementations
+                if (!method.IsAbstract && method.Body != null)
+                {
+                    // Default implementation - validate it
+                    // For now, we allow any implementation - the C# compiler will catch issues
+                    // Future: Add more strict validation for default interface methods
+                }
             }
 
             ExitScope();
@@ -534,23 +621,50 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(FunctionNode node)
         {
-            var returnType = ResolveTypeReference(node.ReturnType);
-
-            var symbol = new Symbol(node.Name, SymbolKind.Function, returnType, node.Line, node.Column);
-            symbol.ReturnType = returnType;
+            var symbol = new Symbol(node.Name, SymbolKind.Function, null, node.Line, node.Column);
             symbol.Access = node.Access;
 
-            if (!_currentScope.Define(symbol))
+            // Check if there's an existing symbol (could be stdlib function)
+            var existing = _currentScope.ResolveLocal(node.Name);
+            if (existing != null)
             {
-                Error($"Function '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                // Allow overriding stdlib functions (line 0 means stdlib)
+                if (existing.Line == 0 && existing.Column == 0)
+                {
+                    // Remove the stdlib definition to allow user override
+                    _currentScope.Symbols.Remove(node.Name);
+                }
+                else if (!_currentScope.Define(symbol))
+                {
+                    Error($"Function '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                    // Continue processing even with error
+                }
             }
 
-            SetNodeSymbol(node, symbol);
-            SetNodeType(node, returnType);
+            _currentScope.Define(symbol);
 
             // Enter function scope
             var functionScope = EnterScope(node.Name, ScopeKind.Function);
+
+            // Register generic type parameters as symbols in the function scope BEFORE resolving return type
+            var genericTypeParams = new List<TypeInfo>();
+            foreach (var genericParam in node.GenericParameters)
+            {
+                var typeParamType = new TypeInfo(genericParam, TypeKind.TypeParameter);
+                var typeParamSymbol = new Symbol(genericParam, SymbolKind.TypeParameter, typeParamType, node.Line, node.Column);
+                functionScope.Define(typeParamSymbol);
+                genericTypeParams.Add(typeParamType);
+            }
+            symbol.GenericParameters.AddRange(genericTypeParams);
+
+            // Now resolve return type (type parameters are in scope)
+            var returnType = ResolveTypeReference(node.ReturnType);
+            symbol.ReturnType = returnType;
+            symbol.Type = returnType;
             functionScope.ReturnType = returnType;
+
+            SetNodeSymbol(node, symbol);
+            SetNodeType(node, returnType);
 
             // Process parameters
             foreach (var param in node.Parameters)
@@ -577,16 +691,38 @@ namespace BasicLang.Compiler.SemanticAnalysis
             symbol.ReturnType = _typeManager.VoidType;
             symbol.Access = node.Access;
 
-            if (!_currentScope.Define(symbol))
+            // Check if there's an existing symbol (could be stdlib function)
+            var existing = _currentScope.ResolveLocal(node.Name);
+            if (existing != null)
             {
-                Error($"Subroutine '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                // Allow overriding stdlib functions (line 0 means stdlib)
+                if (existing.Line == 0 && existing.Column == 0)
+                {
+                    _currentScope.Symbols.Remove(node.Name);
+                }
+                else if (!_currentScope.Define(symbol))
+                {
+                    Error($"Subroutine '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                }
             }
 
+            _currentScope.Define(symbol);
             SetNodeSymbol(node, symbol);
 
             // Enter subroutine scope
             var subScope = EnterScope(node.Name, ScopeKind.Subroutine);
             subScope.ReturnType = _typeManager.VoidType;
+
+            // Register generic type parameters as symbols in the subroutine scope
+            var genericTypeParams = new List<TypeInfo>();
+            foreach (var genericParam in node.GenericParameters)
+            {
+                var typeParamType = new TypeInfo(genericParam, TypeKind.TypeParameter);
+                var typeParamSymbol = new Symbol(genericParam, SymbolKind.TypeParameter, typeParamType, node.Line, node.Column);
+                subScope.Define(typeParamSymbol);
+                genericTypeParams.Add(typeParamType);
+            }
+            symbol.GenericParameters.AddRange(genericTypeParams);
 
             // Process parameters
             foreach (var param in node.Parameters)
@@ -610,7 +746,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
         public void Visit(ParameterNode node)
         {
             var paramType = ResolveTypeReference(node.Type);
-            var symbol = new Symbol(node.Name, SymbolKind.Parameter, paramType, node.Line, node.Column);
+            var symbol = new Symbol(node.Name, SymbolKind.Parameter, paramType, node.Line, node.Column)
+            {
+                IsOptional = node.IsOptional,
+                IsParamArray = node.IsParamArray,
+                IsByRef = node.IsByRef
+            };
 
             if (!_currentScope.Define(symbol))
             {
@@ -1239,6 +1380,43 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
+        public void Visit(LinqQueryExpressionNode node)
+        {
+            // Analyze each clause
+            foreach (var clause in node.Clauses)
+            {
+                switch (clause)
+                {
+                    case FromClause from:
+                        from.Collection?.Accept(this);
+                        // Define the range variable
+                        var symbol = new Symbol(from.VariableName, SymbolKind.Variable, _typeManager.ObjectType, from.Line, from.Column);
+                        _currentScope.Define(symbol);
+                        break;
+                    case WhereClause where:
+                        where.Condition?.Accept(this);
+                        break;
+                    case SelectClause select:
+                        select.Selector?.Accept(this);
+                        break;
+                    case OrderByClause orderBy:
+                        orderBy.KeySelector?.Accept(this);
+                        break;
+                    case LetClause let:
+                        let.Value?.Accept(this);
+                        var letSymbol = new Symbol(let.VariableName, SymbolKind.Variable, _typeManager.ObjectType, let.Line, let.Column);
+                        _currentScope.Define(letSymbol);
+                        break;
+                    case TakeClause take:
+                        take.Count?.Accept(this);
+                        break;
+                    case SkipClause skip:
+                        skip.Count?.Accept(this);
+                        break;
+                }
+            }
+        }
+
         // ====================================================================
         // Statements
         // ====================================================================
@@ -1401,6 +1579,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             ExitScope();
         }
 
+        // Stack of With object types for nested With blocks
+        private Stack<TypeInfo> _withObjectTypes = new Stack<TypeInfo>();
+
         public void Visit(WithStatementNode node)
         {
             // Analyze the object expression
@@ -1410,12 +1591,41 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Create a scope for the With block where member access can be implicit
             EnterScope("WithBlock", ScopeKind.Block);
 
-            // Store the With object type for implicit member access resolution
-            // (In a full implementation, we'd need to track this for .Property syntax)
+            // Push the With object type for implicit member access resolution
+            _withObjectTypes.Push(objectType);
 
             node.Body.Accept(this);
 
+            _withObjectTypes.Pop();
             ExitScope();
+        }
+
+        public void Visit(ImplicitWithMemberNode node)
+        {
+            if (_withObjectTypes.Count == 0)
+            {
+                Error("Implicit member access (.) is only valid inside a With block", node.Line, node.Column);
+                SetNodeType(node, _typeManager.ObjectType);
+                return;
+            }
+
+            var withType = _withObjectTypes.Peek();
+            if (withType == null)
+            {
+                SetNodeType(node, _typeManager.ObjectType);
+                return;
+            }
+
+            // Look up the member in the With object type
+            if (withType.Members.TryGetValue(node.MemberName, out var memberSymbol))
+            {
+                SetNodeType(node, memberSymbol.Type ?? memberSymbol.ReturnType ?? _typeManager.ObjectType);
+            }
+            else
+            {
+                Error($"Type '{withType.Name}' does not have a member '{node.MemberName}'", node.Line, node.Column);
+                SetNodeType(node, _typeManager.ObjectType);
+            }
         }
 
         public void Visit(WhileLoopNode node)
@@ -1505,6 +1715,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     Error("Cannot return a value from a subroutine", node.Line, node.Column);
                 }
+                // Allow returning any type when the expected type is a type parameter (generics)
+                else if (functionScope.ReturnType.Kind == TypeKind.TypeParameter ||
+                         returnType?.Kind == TypeKind.TypeParameter)
+                {
+                    // Type parameters are checked at instantiation time
+                }
                 else if (!functionScope.ReturnType.IsAssignableFrom(returnType))
                 {
                     Error($"Cannot return type '{returnType}' from function expecting '{functionScope.ReturnType}'",
@@ -1559,7 +1775,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Check type compatibility
             if (node.Operator == "=")
             {
-                if (!targetType.IsAssignableFrom(valueType))
+                // Allow assignment when either type is a type parameter (generics)
+                if (targetType.Kind == TypeKind.TypeParameter || valueType.Kind == TypeKind.TypeParameter)
+                {
+                    // Type checking deferred to instantiation time
+                }
+                else if (!targetType.IsAssignableFrom(valueType))
                 {
                     Error($"Cannot assign value of type '{valueType}' to '{targetType}'",
                           node.Line, node.Column);
@@ -1567,8 +1788,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
             else // Compound assignment
             {
-                // Operators like +=, -= require numeric types
-                if (!targetType.IsNumeric() || !valueType.IsNumeric())
+                // Operators like +=, -= require numeric types (allow type parameters)
+                if (!targetType.IsNumeric() && !valueType.IsNumeric() &&
+                    targetType.Kind != TypeKind.TypeParameter && valueType.Kind != TypeKind.TypeParameter)
                 {
                     Error($"Operator '{node.Operator}' requires numeric operands", node.Line, node.Column);
                 }
@@ -1646,8 +1868,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case "<=":
                 case ">":
                 case ">=":
-                    // Comparison operators
-                    if (!leftType.IsNumeric() || !rightType.IsNumeric())
+                    // Comparison operators - allow type parameters (generics)
+                    if (!leftType.IsNumeric() && !rightType.IsNumeric() &&
+                        leftType.Kind != TypeKind.TypeParameter && rightType.Kind != TypeKind.TypeParameter)
                     {
                         Error($"Comparison operator '{node.Operator}' requires numeric operands",
                               node.Line, node.Column);
@@ -1813,6 +2036,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(IdentifierExpressionNode node)
         {
+            // Handle 'Me' keyword - refers to current class instance
+            if (node.Name.Equals("Me", StringComparison.OrdinalIgnoreCase))
+            {
+                var classScope = _currentScope.GetClassScope();
+                if (classScope == null)
+                {
+                    Error("'Me' can only be used within a class", node.Line, node.Column);
+                    SetNodeType(node, _typeManager.ObjectType);
+                }
+                else
+                {
+                    var classType = classScope.ClassType;
+                    if (classType != null)
+                    {
+                        SetNodeType(node, classType);
+                    }
+                    else
+                    {
+                        SetNodeType(node, _typeManager.ObjectType);
+                    }
+                }
+                return;
+            }
+
             var symbol = _currentScope.Resolve(node.Name);
 
             if (symbol == null)
@@ -1871,11 +2118,32 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (calleeSymbol != null &&
                 (calleeSymbol.Kind == SymbolKind.Function || calleeSymbol.Kind == SymbolKind.Subroutine))
             {
+                // Count required parameters and check for ParamArray
+                int requiredCount = calleeSymbol.Parameters.Count(p => !p.IsOptional && !p.IsParamArray);
+                bool hasParamArray = calleeSymbol.Parameters.Any(p => p.IsParamArray);
+                int totalParams = calleeSymbol.Parameters.Count;
+
                 // Check argument count
-                if (node.Arguments.Count != calleeSymbol.Parameters.Count)
+                bool validArgCount = node.Arguments.Count >= requiredCount &&
+                                     (hasParamArray || node.Arguments.Count <= totalParams);
+
+                if (!validArgCount)
                 {
-                    Error($"Function '{calleeSymbol.Name}' expects {calleeSymbol.Parameters.Count} arguments, got {node.Arguments.Count}",
-                          node.Line, node.Column);
+                    if (hasParamArray)
+                    {
+                        Error($"Function '{calleeSymbol.Name}' requires at least {requiredCount} arguments, got {node.Arguments.Count}",
+                              node.Line, node.Column);
+                    }
+                    else if (requiredCount == totalParams)
+                    {
+                        Error($"Function '{calleeSymbol.Name}' expects {totalParams} arguments, got {node.Arguments.Count}",
+                              node.Line, node.Column);
+                    }
+                    else
+                    {
+                        Error($"Function '{calleeSymbol.Name}' expects {requiredCount} to {totalParams} arguments, got {node.Arguments.Count}",
+                              node.Line, node.Column);
+                    }
                 }
                 else
                 {
@@ -1884,7 +2152,38 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     {
                         node.Arguments[i].Accept(this);
                         var argType = GetNodeType(node.Arguments[i]);
-                        var paramType = calleeSymbol.Parameters[i].Type;
+
+                        TypeInfo paramType;
+                        if (i < calleeSymbol.Parameters.Count)
+                        {
+                            var param = calleeSymbol.Parameters[i];
+                            if (param.IsParamArray)
+                            {
+                                // ParamArray element type (array element type)
+                                paramType = param.Type?.ElementType ?? param.Type;
+                            }
+                            else
+                            {
+                                paramType = param.Type;
+                            }
+                        }
+                        else if (hasParamArray)
+                        {
+                            // Extra args go to ParamArray - use element type
+                            var paramArrayParam = calleeSymbol.Parameters.Last();
+                            paramType = paramArrayParam.Type?.ElementType ?? paramArrayParam.Type;
+                        }
+                        else
+                        {
+                            continue;
+                        }
+
+                        // Allow any type when the parameter is a type parameter (generics)
+                        if (paramType?.Kind == TypeKind.TypeParameter || argType?.Kind == TypeKind.TypeParameter)
+                        {
+                            // Type checking deferred to instantiation time
+                            continue;
+                        }
 
                         if (argType != null && paramType != null && !paramType.IsAssignableFrom(argType))
                         {
@@ -1951,6 +2250,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
         public void Visit(NewExpressionNode node)
         {
             var type = ResolveTypeReference(node.Type);
+
+            // Validate: cannot instantiate abstract classes
+            if (type != null && type.IsAbstract)
+            {
+                Error($"Cannot create an instance of abstract class '{type.Name}'", node.Line, node.Column);
+            }
 
             // TODO: Check constructor arguments
             foreach (var arg in node.Arguments)

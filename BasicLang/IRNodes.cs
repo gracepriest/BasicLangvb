@@ -103,13 +103,17 @@ namespace BasicLang.Compiler.IR
         public int Version { get; set; }
         public bool IsParameter { get; set; }
         public bool IsGlobal { get; set; }
-        
-        public IRVariable(string name, TypeInfo type, int version = 0) 
+        public bool IsOptional { get; set; }
+        public bool IsParamArray { get; set; }
+        public bool IsByRef { get; set; }
+        public IRValue DefaultValue { get; set; }
+
+        public IRVariable(string name, TypeInfo type, int version = 0)
             : base(name, type)
         {
             Version = version;
         }
-        
+
         public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
         
         public override string ToString()
@@ -404,13 +408,15 @@ namespace BasicLang.Compiler.IR
     {
         public string FunctionName { get; set; }
         public List<IRValue> Arguments { get; set; }
+        public List<bool> ByRefArguments { get; set; }  // Track which arguments are by-ref
         public bool IsTailCall { get; set; }
-        
+
         public IRCall(string resultName, string functionName, TypeInfo returnType)
             : base(resultName, returnType)
         {
             FunctionName = functionName;
             Arguments = new List<IRValue>();
+            ByRefArguments = new List<bool>();
         }
         
         public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
@@ -860,6 +866,10 @@ namespace BasicLang.Compiler.IR
         public string Name { get; set; }
         public string TypeName { get; set; }
         public TypeInfo Type { get; set; }
+        public bool IsOptional { get; set; }
+        public bool IsParamArray { get; set; }
+        public bool IsByRef { get; set; }
+        public IRValue DefaultValue { get; set; }
     }
 
     /// <summary>
@@ -890,6 +900,8 @@ namespace BasicLang.Compiler.IR
         public string Name { get; set; }
         public TypeInfo ReturnType { get; set; }
         public List<IRParameter> Parameters { get; set; }
+        public bool HasDefaultImplementation { get; set; }
+        public IRFunction DefaultImplementation { get; set; }
 
         public IRInterfaceMethod()
         {
@@ -977,6 +989,7 @@ namespace BasicLang.Compiler.IR
         public List<IRConstructor> Constructors { get; set; }
         public List<IREvent> Events { get; set; }
         public List<string> GenericParameters { get; set; }
+        public bool IsAbstract { get; set; }
 
         public IRClass(string name)
         {
@@ -1014,6 +1027,7 @@ namespace BasicLang.Compiler.IR
         public bool IsStatic { get; set; }
         public bool IsVirtual { get; set; }
         public bool IsOverride { get; set; }
+        public bool IsAbstract { get; set; }
         public bool IsSealed { get; set; }
         public List<IRVariable> Parameters { get; set; }
         public IRFunction Implementation { get; set; }

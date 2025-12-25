@@ -274,15 +274,55 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine("{");
             Indent();
 
-            // Generate method signatures
+            // Generate method signatures and default implementations
             foreach (var method in irInterface.Methods)
             {
                 var returnType = MapType(method.ReturnType);
                 var methodName = SanitizeName(method.Name);
-                var paramList = string.Join(", ", method.Parameters.Select(p =>
-                    $"{MapTypeName(p.TypeName)} {SanitizeName(p.Name)}"));
+                var paramList = string.Join(", ", method.Parameters.Select(FormatIRParameter));
 
-                WriteLine($"{returnType} {methodName}({paramList});");
+                if (method.HasDefaultImplementation && method.DefaultImplementation != null)
+                {
+                    // Generate default implementation (C# 8.0+)
+                    WriteLine($"{returnType} {methodName}({paramList})");
+                    WriteLine("{");
+                    Indent();
+
+                    // Generate the default implementation body from IR
+                    _currentFunction = method.DefaultImplementation;
+                    InitializeFunctionContext(method.DefaultImplementation);
+                    _processedBlocks = new HashSet<BasicBlock>();
+                    _loopEndBlocks = new Stack<BasicBlock>();
+
+                    // Declare locals
+                    var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var localVar in method.DefaultImplementation.LocalVariables)
+                    {
+                        var varName = GetValueName(localVar);
+                        if (declared.Add(varName))
+                        {
+                            var csharpType = MapType(localVar.Type);
+                            var defaultValue = GetDefaultValue(localVar.Type);
+                            WriteLine($"{csharpType} {varName} = {defaultValue};");
+                        }
+                    }
+
+                    if (method.DefaultImplementation.LocalVariables.Count > 0)
+                        WriteLine();
+
+                    if (method.DefaultImplementation.EntryBlock != null)
+                        GenerateStructuredBlock(method.DefaultImplementation.EntryBlock);
+
+                    _currentFunction = null;
+
+                    Unindent();
+                    WriteLine("}");
+                }
+                else
+                {
+                    // Abstract method signature only
+                    WriteLine($"{returnType} {methodName}({paramList});");
+                }
             }
 
             // Generate property signatures
@@ -337,8 +377,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var delegateName = SanitizeName(irDelegate.Name);
             var returnType = MapType(irDelegate.ReturnType);
-            var paramList = string.Join(", ", irDelegate.Parameters.Select(p =>
-                $"{MapTypeName(p.TypeName)} {SanitizeName(p.Name)}"));
+            var paramList = string.Join(", ", irDelegate.Parameters.Select(FormatIRParameter));
 
             WriteLine($"public delegate {returnType} {delegateName}({paramList});");
         }
@@ -366,6 +405,118 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         }
 
         /// <summary>
+        /// Format a single parameter for C# output
+        /// </summary>
+        private string FormatParameter(IRVariable param, bool isFirstExtensionParam = false)
+        {
+            var parts = new List<string>();
+
+            // Extension method 'this' modifier
+            if (isFirstExtensionParam)
+                parts.Add("this");
+
+            // params for ParamArray
+            if (param.IsParamArray)
+                parts.Add("params");
+
+            // ref for ByRef
+            if (param.IsByRef)
+                parts.Add("ref");
+
+            // Type and name
+            parts.Add(MapType(param.Type));
+            parts.Add(GetValueName(param));
+
+            var result = string.Join(" ", parts);
+
+            // Default value for optional
+            if (param.IsOptional && param.DefaultValue != null)
+            {
+                result += " = " + FormatDefaultValue(param.DefaultValue);
+            }
+            else if (param.IsOptional)
+            {
+                // Default value based on type
+                result += " = " + GetDefaultValueLiteral(param.Type);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Format a single parameter from IRParameter
+        /// </summary>
+        private string FormatIRParameter(IRParameter param)
+        {
+            var parts = new List<string>();
+
+            // params for ParamArray
+            if (param.IsParamArray)
+                parts.Add("params");
+
+            // ref for ByRef
+            if (param.IsByRef)
+                parts.Add("ref");
+
+            // Type and name
+            parts.Add(MapTypeName(param.TypeName));
+            parts.Add(SanitizeName(param.Name));
+
+            var result = string.Join(" ", parts);
+
+            // Default value for optional
+            if (param.IsOptional && param.DefaultValue != null)
+            {
+                result += " = " + FormatDefaultValue(param.DefaultValue);
+            }
+            else if (param.IsOptional)
+            {
+                // Use default for the type
+                result += " = default";
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Format a default value expression for C#
+        /// </summary>
+        private string FormatDefaultValue(IRValue value)
+        {
+            if (value is IRConstant constant)
+            {
+                if (constant.Value is string s)
+                    return $"\"{s}\"";
+                if (constant.Value is bool b)
+                    return b ? "true" : "false";
+                if (constant.Value is null)
+                    return "null";
+                return constant.Value.ToString();
+            }
+            return "default";
+        }
+
+        /// <summary>
+        /// Get default value literal for a type
+        /// </summary>
+        private string GetDefaultValueLiteral(TypeInfo type)
+        {
+            if (type == null) return "default";
+            var typeName = type.Name?.ToLowerInvariant() ?? "";
+            return typeName switch
+            {
+                "integer" or "int" => "0",
+                "long" => "0L",
+                "single" or "float" => "0.0f",
+                "double" => "0.0",
+                "boolean" or "bool" => "false",
+                "string" => "\"\"",
+                "char" => "'\\0'",
+                _ => "default"
+            };
+        }
+
+        /// <summary>
         /// Generate a C# class from IRClass
         /// </summary>
         private void GenerateClass(IRClass irClass)
@@ -378,7 +529,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 genericParams = "<" + string.Join(", ", irClass.GenericParameters) + ">";
             }
 
-            var classDecl = $"public class {className}{genericParams}";
+            var abstractMod = irClass.IsAbstract ? "abstract " : "";
+            var classDecl = $"public {abstractMod}class {className}{genericParams}";
             if (!string.IsNullOrEmpty(irClass.BaseClass))
             {
                 classDecl += $" : {SanitizeName(irClass.BaseClass)}";
@@ -456,7 +608,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (ctor.Implementation != null)
             {
                 paramList = string.Join(", ", ctor.Implementation.Parameters.Select(p =>
-                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                    FormatParameter(p)));
             }
 
             // Base constructor call
@@ -558,7 +710,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var access = MapAccessModifier(method.Access);
             var staticMod = method.IsStatic ? "static " : "";
-            var virtualMod = method.IsVirtual && !method.IsOverride ? "virtual " : "";
+            var abstractMod = method.IsAbstract ? "abstract " : "";
+            var virtualMod = method.IsVirtual && !method.IsOverride && !method.IsAbstract ? "virtual " : "";
             var overrideMod = method.IsOverride ? "override " : "";
             var sealedMod = method.IsSealed && method.IsOverride ? "sealed " : "";
             var returnType = MapType(method.ReturnType);
@@ -569,7 +722,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (method.Implementation != null)
             {
                 paramList = string.Join(", ", method.Implementation.Parameters.Select(p =>
-                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                    FormatParameter(p)));
             }
 
             // Check if this is an operator overload
@@ -617,8 +770,16 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             else
             {
-                WriteLine($"{access} {staticMod}{sealedMod}{overrideMod}{virtualMod}{returnType} {name}({paramList})");
+                WriteLine($"{access} {staticMod}{sealedMod}{overrideMod}{abstractMod}{virtualMod}{returnType} {name}({paramList})");
             }
+
+            // Abstract methods don't have a body
+            if (method.IsAbstract)
+            {
+                WriteLine(";");
+                return;
+            }
+
             WriteLine("{");
             Indent();
 
@@ -790,8 +951,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             for (int i = 0; i < function.Parameters.Count; i++)
             {
                 var p = function.Parameters[i];
-                var thisModifier = (function.IsExtension && i == 0) ? "this " : "";
-                paramList.Add($"{thisModifier}{MapType(p.Type)} {GetValueName(p)}");
+                var isFirstExtensionParam = function.IsExtension && i == 0;
+                paramList.Add(FormatParameter(p, isFirstExtensionParam));
             }
             var parameters = string.Join(", ", paramList);
 
@@ -1865,7 +2026,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRCall call)
         {
-            var argExprs = call.Arguments.Select(EmitExpression).ToArray();
+            // Format arguments, adding 'ref' prefix for ByRef parameters
+            var argExprs = call.Arguments.Select((arg, i) =>
+            {
+                var expr = EmitExpression(arg);
+                bool isByRef = call.ByRefArguments != null && i < call.ByRefArguments.Count && call.ByRefArguments[i];
+                return isByRef ? $"ref {expr}" : expr;
+            }).ToArray();
             var functionName = call.FunctionName;
 
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
@@ -2303,6 +2470,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             if (string.IsNullOrEmpty(name))
                 return "_unnamed";
+
+            // Convert VB.NET's "Me" to C#'s "this"
+            if (name.Equals("Me", StringComparison.OrdinalIgnoreCase))
+                return "this";
 
             var sanitized = new StringBuilder();
 

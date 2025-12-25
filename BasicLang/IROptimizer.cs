@@ -953,16 +953,21 @@ namespace BasicLang.Compiler.IR.Optimization
         public void AddStandardPasses()
         {
             AddPass(new ConstantFoldingPass());
+            AddPass(new ConstantPropagationPass());
             AddPass(new CopyPropagationPass());
             AddPass(new DeadCodeEliminationPass());
             AddPass(new CommonSubexpressionEliminationPass());
             AddPass(new StrengthReductionPass());
+            AddPass(new PeepholeOptimizationPass());
         }
-        
+
         public void AddAggressivePasses()
         {
             AddStandardPasses();
             AddPass(new LoopInvariantCodeMotionPass());
+            AddPass(new FunctionInliningPass());
+            AddPass(new TailCallOptimizationPass());
+            AddPass(new AlgebraicSimplificationPass());
         }
         
         public OptimizationResult Run(IRModule module)
@@ -1028,10 +1033,738 @@ namespace BasicLang.Compiler.IR.Optimization
         public int Iteration { get; set; }
         public int ModificationCount { get; set; }
         public bool MadeChanges { get; set; }
-        
+
         public override string ToString()
         {
             return $"[Iteration {Iteration}] {PassName}: {ModificationCount} modifications";
+        }
+    }
+
+    /// <summary>
+    /// Function inlining - inline small functions to reduce call overhead
+    /// </summary>
+    public class FunctionInliningPass : OptimizationPass
+    {
+        private readonly int _maxInlineSize;
+        private readonly int _maxInlineDepth;
+
+        public FunctionInliningPass(int maxInlineSize = 10, int maxInlineDepth = 3)
+            : base("Function Inlining")
+        {
+            _maxInlineSize = maxInlineSize;
+            _maxInlineDepth = maxInlineDepth;
+        }
+
+        public override bool Run(IRModule module)
+        {
+            ModificationCount = 0;
+
+            // Build a map of inlineable functions
+            var inlineableFunctions = new Dictionary<string, IRFunction>();
+            foreach (var func in module.Functions)
+            {
+                if (IsInlineable(func))
+                {
+                    inlineableFunctions[func.Name] = func;
+                }
+            }
+
+            // Process each function looking for call sites to inline
+            foreach (var function in module.Functions)
+            {
+                if (function.IsExternal) continue;
+
+                foreach (var block in function.Blocks)
+                {
+                    InlineCallsInBlock(block, inlineableFunctions, function, 0);
+                }
+            }
+
+            return ModificationCount > 0;
+        }
+
+        private bool IsInlineable(IRFunction func)
+        {
+            // Don't inline external functions
+            if (func.IsExternal) return false;
+
+            // Don't inline recursive functions (simple check)
+            if (ContainsSelfCall(func)) return false;
+
+            // Don't inline functions with too many instructions
+            int instructionCount = func.Blocks.Sum(b => b.Instructions.Count);
+            if (instructionCount > _maxInlineSize) return false;
+
+            // Don't inline functions with complex control flow (multiple blocks)
+            if (func.Blocks.Count > 2) return false;
+
+            // Don't inline functions with exception handling
+            // (would need to check for try/catch in IR)
+
+            return true;
+        }
+
+        private bool ContainsSelfCall(IRFunction func)
+        {
+            foreach (var block in func.Blocks)
+            {
+                foreach (var inst in block.Instructions)
+                {
+                    if (inst is IRCall call && call.FunctionName == func.Name)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private void InlineCallsInBlock(
+            BasicBlock block,
+            Dictionary<string, IRFunction> inlineableFunctions,
+            IRFunction currentFunction,
+            int depth)
+        {
+            if (depth >= _maxInlineDepth) return;
+
+            for (int i = 0; i < block.Instructions.Count; i++)
+            {
+                if (block.Instructions[i] is IRCall call &&
+                    inlineableFunctions.TryGetValue(call.FunctionName, out var targetFunc))
+                {
+                    // Inline the function
+                    var inlinedInstructions = InlineFunction(call, targetFunc, currentFunction);
+                    if (inlinedInstructions != null)
+                    {
+                        // Replace the call with the inlined instructions
+                        block.Instructions.RemoveAt(i);
+                        block.Instructions.InsertRange(i, inlinedInstructions);
+                        i += inlinedInstructions.Count - 1;
+                        ReportModification();
+                    }
+                }
+            }
+        }
+
+        private List<IRInstruction> InlineFunction(IRCall call, IRFunction targetFunc, IRFunction caller)
+        {
+            var result = new List<IRInstruction>();
+            var paramMapping = new Dictionary<string, IRValue>();
+
+            // Map parameters to arguments
+            for (int i = 0; i < targetFunc.Parameters.Count && i < call.Arguments.Count; i++)
+            {
+                paramMapping[targetFunc.Parameters[i].Name] = call.Arguments[i];
+            }
+
+            // Clone and transform instructions from the target function
+            string prefix = $"_inline_{call.Name}_";
+            int tempCounter = 0;
+
+            foreach (var block in targetFunc.Blocks)
+            {
+                foreach (var inst in block.Instructions)
+                {
+                    var cloned = CloneAndRemap(inst, paramMapping, prefix, ref tempCounter, call.Name);
+                    if (cloned != null)
+                    {
+                        // Handle return - assign to the call's result variable
+                        if (cloned is IRReturn ret && ret.Value != null)
+                        {
+                            if (!string.IsNullOrEmpty(call.Name))
+                            {
+                                var resultVar = new IRVariable(call.Name, call.Type);
+                                result.Add(new IRAssignment(resultVar, ret.Value));
+                            }
+                        }
+                        else if (!(cloned is IRReturn))
+                        {
+                            result.Add(cloned);
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private IRInstruction CloneAndRemap(
+            IRInstruction inst,
+            Dictionary<string, IRValue> paramMapping,
+            string prefix,
+            ref int tempCounter,
+            string resultName)
+        {
+            // Clone instruction and remap variable references
+            switch (inst)
+            {
+                case IRAssignment assign:
+                    var newTarget = RemapValue(assign.Target, paramMapping, prefix, ref tempCounter) as IRVariable;
+                    var newValue = RemapValue(assign.Value, paramMapping, prefix, ref tempCounter);
+                    return new IRAssignment(newTarget ?? assign.Target, newValue);
+
+                case IRBinaryOp binOp:
+                    var newLeft = RemapValue(binOp.Left, paramMapping, prefix, ref tempCounter);
+                    var newRight = RemapValue(binOp.Right, paramMapping, prefix, ref tempCounter);
+                    return new IRBinaryOp($"{prefix}{tempCounter++}", binOp.Operation, newLeft, newRight, binOp.Type);
+
+                case IRReturn ret:
+                    var retVal = ret.Value != null
+                        ? RemapValue(ret.Value, paramMapping, prefix, ref tempCounter)
+                        : null;
+                    return new IRReturn(retVal);
+
+                default:
+                    return inst;
+            }
+        }
+
+        private IRValue RemapValue(
+            IRValue value,
+            Dictionary<string, IRValue> paramMapping,
+            string prefix,
+            ref int tempCounter)
+        {
+            if (value is IRVariable var)
+            {
+                if (paramMapping.TryGetValue(var.Name, out var mapped))
+                {
+                    return mapped;
+                }
+                // Rename local variables with prefix
+                return new IRVariable($"{prefix}{var.Name}", var.Type);
+            }
+            return value;
+        }
+    }
+
+    /// <summary>
+    /// Tail call optimization - convert tail-recursive calls to loops
+    /// </summary>
+    public class TailCallOptimizationPass : OptimizationPass
+    {
+        public TailCallOptimizationPass() : base("Tail Call Optimization") { }
+
+        public override bool Run(IRModule module)
+        {
+            ModificationCount = 0;
+
+            foreach (var function in module.Functions)
+            {
+                if (function.IsExternal) continue;
+
+                OptimizeTailCalls(function);
+            }
+
+            return ModificationCount > 0;
+        }
+
+        private void OptimizeTailCalls(IRFunction function)
+        {
+            foreach (var block in function.Blocks)
+            {
+                for (int i = 0; i < block.Instructions.Count; i++)
+                {
+                    var inst = block.Instructions[i];
+
+                    // Look for pattern: call followed immediately by return of call result
+                    if (inst is IRCall call && call.FunctionName == function.Name)
+                    {
+                        // Check if this is a tail call (followed by return)
+                        if (i + 1 < block.Instructions.Count &&
+                            block.Instructions[i + 1] is IRReturn ret &&
+                            ret.Value is IRVariable retVar &&
+                            retVar.Name == call.Name)
+                        {
+                            // Mark as tail call
+                            call.IsTailCall = true;
+                            ReportModification();
+                        }
+                        else if (i + 1 < block.Instructions.Count &&
+                                 block.Instructions[i + 1] is IRReturn ret2 &&
+                                 ret2.Value == call)
+                        {
+                            call.IsTailCall = true;
+                            ReportModification();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Constant propagation - propagate known constant values through the code
+    /// </summary>
+    public class ConstantPropagationPass : OptimizationPass
+    {
+        public ConstantPropagationPass() : base("Constant Propagation") { }
+
+        public override bool Run(IRModule module)
+        {
+            ModificationCount = 0;
+
+            foreach (var function in module.Functions)
+            {
+                if (function.IsExternal) continue;
+
+                // Track known constant values
+                var constants = new Dictionary<string, IRConstant>();
+
+                foreach (var block in function.Blocks)
+                {
+                    PropagateInBlock(block, constants);
+                }
+            }
+
+            return ModificationCount > 0;
+        }
+
+        private void PropagateInBlock(BasicBlock block, Dictionary<string, IRConstant> constants)
+        {
+            for (int i = 0; i < block.Instructions.Count; i++)
+            {
+                var inst = block.Instructions[i];
+
+                // Track constant assignments
+                if (inst is IRAssignment assign)
+                {
+                    if (assign.Value is IRConstant constant && assign.Target is IRVariable target)
+                    {
+                        constants[target.Name] = constant;
+                    }
+                    else if (assign.Target is IRVariable t)
+                    {
+                        // Assignment of non-constant kills the known value
+                        constants.Remove(t.Name);
+                    }
+                }
+
+                // Propagate constants in expressions
+                if (inst is IRBinaryOp binOp)
+                {
+                    bool changed = false;
+
+                    if (binOp.Left is IRVariable leftVar && constants.TryGetValue(leftVar.Name, out var leftConst))
+                    {
+                        binOp.Left = leftConst;
+                        changed = true;
+                    }
+
+                    if (binOp.Right is IRVariable rightVar && constants.TryGetValue(rightVar.Name, out var rightConst))
+                    {
+                        binOp.Right = rightConst;
+                        changed = true;
+                    }
+
+                    if (changed) ReportModification();
+                }
+
+                if (inst is IRUnaryOp unaryOp)
+                {
+                    if (unaryOp.Operand is IRVariable opVar && constants.TryGetValue(opVar.Name, out var opConst))
+                    {
+                        unaryOp.Operand = opConst;
+                        ReportModification();
+                    }
+                }
+
+                if (inst is IRCall call)
+                {
+                    for (int j = 0; j < call.Arguments.Count; j++)
+                    {
+                        if (call.Arguments[j] is IRVariable argVar && constants.TryGetValue(argVar.Name, out var argConst))
+                        {
+                            call.Arguments[j] = argConst;
+                            ReportModification();
+                        }
+                    }
+                }
+
+                if (inst is IRReturn ret && ret.Value is IRVariable retVar)
+                {
+                    if (constants.TryGetValue(retVar.Name, out var retConst))
+                    {
+                        ret.Value = retConst;
+                        ReportModification();
+                    }
+                }
+
+                if (inst is IRConditionalBranch condBr && condBr.Condition is IRVariable condVar)
+                {
+                    if (constants.TryGetValue(condVar.Name, out var condConst))
+                    {
+                        condBr.Condition = condConst;
+                        ReportModification();
+                    }
+                }
+
+                if (inst is IRStore store)
+                {
+                    if (store.Value is IRVariable storeVar && constants.TryGetValue(storeVar.Name, out var storeConst))
+                    {
+                        store.Value = storeConst;
+                        ReportModification();
+                    }
+                    // Store to a variable kills its constant value
+                    if (store.Address is IRVariable addrVar)
+                    {
+                        constants.Remove(addrVar.Name);
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Peephole optimizations - pattern-based local optimizations
+    /// </summary>
+    public class PeepholeOptimizationPass : OptimizationPass
+    {
+        public PeepholeOptimizationPass() : base("Peephole Optimization") { }
+
+        public override bool Run(IRModule module)
+        {
+            ModificationCount = 0;
+
+            foreach (var function in module.Functions)
+            {
+                if (function.IsExternal) continue;
+
+                foreach (var block in function.Blocks)
+                {
+                    OptimizeBlock(block);
+                }
+            }
+
+            return ModificationCount > 0;
+        }
+
+        private void OptimizeBlock(BasicBlock block)
+        {
+            bool changed;
+            do
+            {
+                changed = false;
+
+                for (int i = 0; i < block.Instructions.Count; i++)
+                {
+                    var inst = block.Instructions[i];
+
+                    // Pattern: x + 0 or x - 0 -> x
+                    if (inst is IRBinaryOp binOp)
+                    {
+                        var replacement = OptimizeBinaryOp(binOp);
+                        if (replacement != null && replacement != inst)
+                        {
+                            block.Instructions[i] = replacement;
+                            changed = true;
+                            ReportModification();
+                        }
+                    }
+
+                    // Pattern: Remove redundant assignments (x = x)
+                    if (inst is IRAssignment assign)
+                    {
+                        if (assign.Target is IRVariable target &&
+                            assign.Value is IRVariable source &&
+                            target.Name == source.Name)
+                        {
+                            block.Instructions.RemoveAt(i);
+                            i--;
+                            changed = true;
+                            ReportModification();
+                        }
+                    }
+
+                    // Pattern: Double negation --x -> x
+                    if (inst is IRUnaryOp unary && unary.Operation == UnaryOpKind.Neg)
+                    {
+                        if (unary.Operand is IRUnaryOp innerUnary && innerUnary.Operation == UnaryOpKind.Neg)
+                        {
+                            var newAssign = new IRAssignment(
+                                new IRVariable(unary.Name, unary.Type),
+                                innerUnary.Operand);
+                            block.Instructions[i] = newAssign;
+                            changed = true;
+                            ReportModification();
+                        }
+                    }
+
+                    // Pattern: Boolean not not -> identity
+                    if (inst is IRUnaryOp notOp && notOp.Operation == UnaryOpKind.Not)
+                    {
+                        if (notOp.Operand is IRUnaryOp innerNot && innerNot.Operation == UnaryOpKind.Not)
+                        {
+                            var newAssign = new IRAssignment(
+                                new IRVariable(notOp.Name, notOp.Type),
+                                innerNot.Operand);
+                            block.Instructions[i] = newAssign;
+                            changed = true;
+                            ReportModification();
+                        }
+                    }
+                }
+
+                // Pattern: Remove dead stores followed by another store to same location
+                for (int i = 0; i < block.Instructions.Count - 1; i++)
+                {
+                    if (block.Instructions[i] is IRAssignment first &&
+                        block.Instructions[i + 1] is IRAssignment second)
+                    {
+                        if (first.Target is IRVariable t1 &&
+                            second.Target is IRVariable t2 &&
+                            t1.Name == t2.Name)
+                        {
+                            // Check that the first value isn't used in the second
+                            if (!ValueUsedIn(t1, second.Value))
+                            {
+                                block.Instructions.RemoveAt(i);
+                                changed = true;
+                                ReportModification();
+                            }
+                        }
+                    }
+                }
+
+            } while (changed);
+        }
+
+        private IRInstruction OptimizeBinaryOp(IRBinaryOp binOp)
+        {
+            // x + 0 -> x
+            if (binOp.Operation == BinaryOpKind.Add)
+            {
+                if (IsZero(binOp.Right))
+                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
+                if (IsZero(binOp.Left))
+                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Right);
+            }
+
+            // x - 0 -> x
+            if (binOp.Operation == BinaryOpKind.Sub && IsZero(binOp.Right))
+            {
+                return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
+            }
+
+            // x * 1 -> x
+            if (binOp.Operation == BinaryOpKind.Mul)
+            {
+                if (IsOne(binOp.Right))
+                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
+                if (IsOne(binOp.Left))
+                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Right);
+            }
+
+            // x * 0 -> 0
+            if (binOp.Operation == BinaryOpKind.Mul)
+            {
+                if (IsZero(binOp.Right) || IsZero(binOp.Left))
+                    return new IRAssignment(
+                        new IRVariable(binOp.Name, binOp.Type),
+                        new IRConstant(0, binOp.Type));
+            }
+
+            // x / 1 -> x
+            if (binOp.Operation == BinaryOpKind.Div && IsOne(binOp.Right))
+            {
+                return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
+            }
+
+            // x - x -> 0
+            if (binOp.Operation == BinaryOpKind.Sub &&
+                binOp.Left is IRVariable left &&
+                binOp.Right is IRVariable right &&
+                left.Name == right.Name)
+            {
+                return new IRAssignment(
+                    new IRVariable(binOp.Name, binOp.Type),
+                    new IRConstant(0, binOp.Type));
+            }
+
+            // x / x -> 1 (when x != 0)
+            if (binOp.Operation == BinaryOpKind.Div &&
+                binOp.Left is IRVariable divLeft &&
+                binOp.Right is IRVariable divRight &&
+                divLeft.Name == divRight.Name)
+            {
+                return new IRAssignment(
+                    new IRVariable(binOp.Name, binOp.Type),
+                    new IRConstant(1, binOp.Type));
+            }
+
+            // x And True -> x, x And False -> False
+            if (binOp.Operation == BinaryOpKind.And)
+            {
+                if (IsTrue(binOp.Right))
+                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
+                if (IsTrue(binOp.Left))
+                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Right);
+                if (IsFalse(binOp.Right) || IsFalse(binOp.Left))
+                    return new IRAssignment(
+                        new IRVariable(binOp.Name, binOp.Type),
+                        new IRConstant(false, new TypeInfo("Boolean", TypeKind.Primitive)));
+            }
+
+            // x Or False -> x, x Or True -> True
+            if (binOp.Operation == BinaryOpKind.Or)
+            {
+                if (IsFalse(binOp.Right))
+                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Left);
+                if (IsFalse(binOp.Left))
+                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), binOp.Right);
+                if (IsTrue(binOp.Right) || IsTrue(binOp.Left))
+                    return new IRAssignment(
+                        new IRVariable(binOp.Name, binOp.Type),
+                        new IRConstant(true, new TypeInfo("Boolean", TypeKind.Primitive)));
+            }
+
+            return binOp;
+        }
+
+        private bool IsZero(IRValue value)
+        {
+            if (value is IRConstant c)
+            {
+                if (c.Value is int i) return i == 0;
+                if (c.Value is long l) return l == 0;
+                if (c.Value is double d) return d == 0.0;
+                if (c.Value is float f) return f == 0.0f;
+            }
+            return false;
+        }
+
+        private bool IsOne(IRValue value)
+        {
+            if (value is IRConstant c)
+            {
+                if (c.Value is int i) return i == 1;
+                if (c.Value is long l) return l == 1;
+                if (c.Value is double d) return d == 1.0;
+                if (c.Value is float f) return f == 1.0f;
+            }
+            return false;
+        }
+
+        private bool IsTrue(IRValue value)
+        {
+            return value is IRConstant c && c.Value is bool b && b;
+        }
+
+        private bool IsFalse(IRValue value)
+        {
+            return value is IRConstant c && c.Value is bool b && !b;
+        }
+
+        private bool ValueUsedIn(IRVariable var, IRValue value)
+        {
+            if (value is IRVariable v && v.Name == var.Name) return true;
+            if (value is IRBinaryOp bin)
+            {
+                return ValueUsedIn(var, bin.Left) || ValueUsedIn(var, bin.Right);
+            }
+            if (value is IRUnaryOp un)
+            {
+                return ValueUsedIn(var, un.Operand);
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Algebraic simplification - simplify complex expressions
+    /// </summary>
+    public class AlgebraicSimplificationPass : OptimizationPass
+    {
+        public AlgebraicSimplificationPass() : base("Algebraic Simplification") { }
+
+        public override bool Run(IRModule module)
+        {
+            ModificationCount = 0;
+
+            foreach (var function in module.Functions)
+            {
+                if (function.IsExternal) continue;
+
+                foreach (var block in function.Blocks)
+                {
+                    SimplifyBlock(block);
+                }
+            }
+
+            return ModificationCount > 0;
+        }
+
+        private void SimplifyBlock(BasicBlock block)
+        {
+            for (int i = 0; i < block.Instructions.Count; i++)
+            {
+                var inst = block.Instructions[i];
+
+                if (inst is IRBinaryOp binOp)
+                {
+                    var simplified = SimplifyBinaryOp(binOp);
+                    if (simplified != binOp)
+                    {
+                        block.Instructions[i] = simplified;
+                        ReportModification();
+                    }
+                }
+            }
+        }
+
+        private IRInstruction SimplifyBinaryOp(IRBinaryOp binOp)
+        {
+            // (a + b) - b -> a
+            if (binOp.Operation == BinaryOpKind.Sub && binOp.Left is IRBinaryOp leftAdd)
+            {
+                if (leftAdd.Operation == BinaryOpKind.Add &&
+                    leftAdd.Right is IRVariable addRight &&
+                    binOp.Right is IRVariable subRight &&
+                    addRight.Name == subRight.Name)
+                {
+                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), leftAdd.Left);
+                }
+            }
+
+            // (a - b) + b -> a
+            if (binOp.Operation == BinaryOpKind.Add && binOp.Left is IRBinaryOp leftSub)
+            {
+                if (leftSub.Operation == BinaryOpKind.Sub &&
+                    leftSub.Right is IRVariable subRightVar &&
+                    binOp.Right is IRVariable addRightVar &&
+                    subRightVar.Name == addRightVar.Name)
+                {
+                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), leftSub.Left);
+                }
+            }
+
+            // (a * b) / b -> a (when b != 0)
+            if (binOp.Operation == BinaryOpKind.Div && binOp.Left is IRBinaryOp leftMul)
+            {
+                if (leftMul.Operation == BinaryOpKind.Mul &&
+                    leftMul.Right is IRVariable mulRight &&
+                    binOp.Right is IRVariable divRight &&
+                    mulRight.Name == divRight.Name)
+                {
+                    return new IRAssignment(new IRVariable(binOp.Name, binOp.Type), leftMul.Left);
+                }
+            }
+
+            // 2 * x -> x + x (sometimes faster)
+            if (binOp.Operation == BinaryOpKind.Mul)
+            {
+                if (binOp.Left is IRConstant c && c.Value is int i && i == 2)
+                {
+                    return new IRBinaryOp(binOp.Name, BinaryOpKind.Add, binOp.Right, binOp.Right, binOp.Type);
+                }
+                if (binOp.Right is IRConstant c2 && c2.Value is int i2 && i2 == 2)
+                {
+                    return new IRBinaryOp(binOp.Name, BinaryOpKind.Add, binOp.Left, binOp.Left, binOp.Type);
+                }
+            }
+
+            return binOp;
         }
     }
 }

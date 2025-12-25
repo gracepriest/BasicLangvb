@@ -45,7 +45,7 @@ namespace BasicLang.Compiler.Driver
             // Check for REPL mode
             if (args.Contains("--repl") || args.Contains("-i") || args.Contains("--interactive"))
             {
-                var repl = new BasicLangRepl();
+                var repl = new REPL();
                 repl.Run();
                 return;
             }
@@ -95,6 +95,9 @@ namespace BasicLang.Compiler.Driver
             DemoInterfacesEnumsDelegates();
             DemoEvents();
             DemoExtensionMethods();
+            DemoLinqQueries();
+            DemoPatternMatching();
+            DemoOptionalAndParamArray();
 
             Console.WriteLine();
             Console.WriteLine("Demo complete! Check the generated files in GeneratedCode folder.");
@@ -1150,6 +1153,11 @@ Class Person
         End Set
     End Property
 
+    ' Method using Me reference
+    Public Function GetInfo() As String
+        Return Me.Name & "" is "" & CStr(Me.Age) & "" years old""
+    End Function
+
     ' Virtual method to get a greeting
     Public Overridable Function Greet() As String
         Return ""Hello, I am "" & _name
@@ -1199,6 +1207,9 @@ Sub Main()
     PrintLine(person.Name)
     PrintLine(person.Age)
 
+    ' Use Me reference in method
+    PrintLine(person.GetInfo())
+
     ' Modify via property
     person.Name = ""Johnny""
     PrintLine(person.Name)
@@ -1235,6 +1246,7 @@ End Sub
                     t.Type == TokenType.EndGet ||
                     t.Type == TokenType.Set ||
                     t.Type == TokenType.EndSet ||
+                    t.Type == TokenType.Me ||
                     t.Type == TokenType.MyBase ||
                     t.Type == TokenType.Shared ||
                     t.Type == TokenType.Overridable ||
@@ -1906,6 +1918,42 @@ End Sub
                     Console.WriteLine(csharpCode);
                     SaveToFile("InterfacesEnumsDelegates.cs", csharpCode);
                 }
+
+                // Generate C++ code
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated C++ Code:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var cppCode = CompileToCpp(source, "InterfacesEnumsDelegates");
+                if (cppCode != null)
+                {
+                    Console.WriteLine(cppCode);
+                    SaveToFile("InterfacesEnumsDelegates.cpp", cppCode);
+                }
+
+                // Generate LLVM IR
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated LLVM IR:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var llvmCode = CompileToLLVM(source, "InterfacesEnumsDelegates");
+                if (llvmCode != null)
+                {
+                    Console.WriteLine(llvmCode);
+                    SaveToFile("InterfacesEnumsDelegates.ll", llvmCode);
+                }
+
+                // Generate MSIL
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated MSIL:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var msilCode = CompileToMSIL(source, "InterfacesEnumsDelegates");
+                if (msilCode != null)
+                {
+                    Console.WriteLine(msilCode);
+                    SaveToFile("InterfacesEnumsDelegates.il", msilCode);
+                }
             }
             catch (Exception ex)
             {
@@ -2101,6 +2149,325 @@ End Sub
                 {
                     Console.WriteLine(csharpCode);
                     SaveToFile("ExtensionMethods.cs", csharpCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Error: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+
+            Console.WriteLine();
+        }
+
+        // ====================================================================
+        // Demo 26: LINQ-style Queries
+        // ====================================================================
+
+        static void DemoLinqQueries()
+        {
+            Console.WriteLine("Demo 26: LINQ-style Queries");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+' Demo: LINQ-style Queries
+' Note: LINQ tokens are recognized, full method chain generation is in progress
+
+Sub Main()
+    Dim numbers[10] As Integer
+
+    ' Initialize array
+    numbers[0] = 5
+    numbers[1] = 2
+    numbers[2] = 8
+    numbers[3] = 1
+    numbers[4] = 9
+
+    ' LINQ query expression is parsed (tokens recognized)
+    ' Full code gen would use method chains like:
+    ' numbers.Where(n => n > 5).Select(n => n)
+
+    PrintLine(""LINQ infrastructure is in place"")
+    PrintLine(""Query tokens: From, Where, Select, OrderBy, etc."")
+End Sub
+";
+
+            try
+            {
+                // Lexical Analysis
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+                Console.WriteLine($"✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Parse
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+                Console.WriteLine($"✓ Parsing: {ast.Declarations.Count} declarations");
+
+                // Semantic analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+                Console.WriteLine($"✓ Semantic analysis: {semanticAnalyzer.Errors.Count} errors");
+
+                // IR generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, "LinqQueries");
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions");
+
+                // Generate C# code
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated C# Code:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var csharpCode = CompileToCSharp(source, "LinqQueries");
+                if (csharpCode != null)
+                {
+                    Console.WriteLine(csharpCode);
+                    SaveToFile("LinqQueries.cs", csharpCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Error: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+
+            Console.WriteLine();
+        }
+
+        // ====================================================================
+        // Demo 27: Pattern Matching
+        // ====================================================================
+
+        static void DemoPatternMatching()
+        {
+            Console.WriteLine("Demo 27: Pattern Matching");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+' Demo: Pattern Matching with Select Case
+
+Sub Main()
+    ' Simple value patterns
+    Dim day As Integer = 3
+    Select Case day
+        Case 1
+            PrintLine(""Monday"")
+        Case 2
+            PrintLine(""Tuesday"")
+        Case 3
+            PrintLine(""Wednesday"")
+        Case 4
+            PrintLine(""Thursday"")
+        Case 5
+            PrintLine(""Friday"")
+        Case 6
+            PrintLine(""Saturday"")
+        Case 7
+            PrintLine(""Sunday"")
+        Case Else
+            PrintLine(""Invalid day"")
+    End Select
+
+    ' String pattern matching
+    Dim command As String = ""save""
+    Select Case command
+        Case ""open""
+            PrintLine(""Opening file..."")
+        Case ""save""
+            PrintLine(""Saving file..."")
+        Case ""close""
+            PrintLine(""Closing file..."")
+        Case Else
+            PrintLine(""Unknown command"")
+    End Select
+End Sub
+";
+
+            try
+            {
+                // Lexical Analysis
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+                Console.WriteLine($"✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Parse
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+                Console.WriteLine($"✓ Parsing: {ast.Declarations.Count} declarations");
+
+                // Semantic analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+                Console.WriteLine($"✓ Semantic analysis: {semanticAnalyzer.Errors.Count} errors");
+
+                // IR generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, "PatternMatching");
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions");
+
+                // Generate C# code
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated C# Code:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var csharpCode = CompileToCSharp(source, "PatternMatching");
+                if (csharpCode != null)
+                {
+                    Console.WriteLine(csharpCode);
+                    SaveToFile("PatternMatching.cs", csharpCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"✗ Error: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+
+            Console.WriteLine();
+        }
+
+        // ====================================================================
+        // Demo 28: Optional Parameters, ParamArray, and With Blocks
+        // ====================================================================
+
+        static void DemoOptionalAndParamArray()
+        {
+            Console.WriteLine("Demo 28: Optional Parameters, ParamArray, and With Blocks");
+            Console.WriteLine("-".PadRight(70, '-'));
+
+            string source = @"
+' Demo: Optional Parameters, ParamArray, and With Block Improvements
+
+' Class to demonstrate With block
+Class Person
+    Public Name As String
+    Public Age As Integer
+
+    Sub New(n As String, a As Integer)
+        Name = n
+        Age = a
+    End Sub
+End Class
+
+' Function with optional parameters
+Function Greet(name As String, Optional greeting As String = ""Hello"", Optional excited As Boolean = False) As String
+    Dim result As String
+    result = greeting & "", "" & name
+    If excited Then
+        result = result & ""!""
+    End If
+    Return result
+End Function
+
+' Function with ParamArray for variable arguments
+' Note: ParamArray receives an array, demonstrated via C# code generation
+Function Sum(ParamArray numbers As Integer) As Integer
+    Return 0
+End Function
+
+' Subroutine with ByRef parameter
+Sub Increment(ByRef value As Integer)
+    value = value + 1
+End Sub
+
+Sub Main()
+    PrintLine(""=== Optional Parameters Demo ==="")
+
+    ' Using all defaults
+    PrintLine(Greet(""World""))
+
+    ' Providing custom greeting
+    PrintLine(Greet(""User"", ""Hi""))
+
+    ' Providing all arguments
+    PrintLine(Greet(""Developer"", ""Welcome"", True))
+
+    PrintLine("""")
+    PrintLine(""=== ParamArray Demo ==="")
+
+    ' ParamArray allows variable number of arguments
+    Dim result As Integer
+    result = Sum(1, 2, 3)
+    PrintLine(result)
+
+    PrintLine("""")
+    PrintLine(""=== ByRef Parameter Demo ==="")
+
+    Dim counter As Integer = 10
+    PrintLine(counter)
+    Increment(counter)
+    PrintLine(counter)
+End Sub
+";
+
+            try
+            {
+                // Lexical Analysis
+                var lexer = new Lexer(source);
+                var tokens = lexer.Tokenize();
+                Console.WriteLine($"✓ Lexical analysis: {tokens.Count} tokens");
+
+                // Check for Optional and ParamArray tokens
+                var optionalTokens = tokens.Where(t => t.Type == TokenType.Optional).ToList();
+                var paramArrayTokens = tokens.Where(t => t.Type == TokenType.ParamArray).ToList();
+                var byRefTokens = tokens.Where(t => t.Type == TokenType.ByRef).ToList();
+
+                if (optionalTokens.Count > 0 || paramArrayTokens.Count > 0 || byRefTokens.Count > 0)
+                {
+                    Console.WriteLine($"  Found: {optionalTokens.Count} Optional, {paramArrayTokens.Count} ParamArray, {byRefTokens.Count} ByRef tokens");
+                }
+
+                // Parse
+                var parser = new Parser(tokens);
+                var ast = parser.Parse();
+                Console.WriteLine($"✓ Parsing: {ast.Declarations.Count} declarations");
+
+                // Semantic analysis
+                var semanticAnalyzer = new SemanticAnalyzer();
+                bool semanticSuccess = semanticAnalyzer.Analyze(ast);
+
+                if (semanticSuccess)
+                {
+                    Console.WriteLine($"✓ Semantic analysis passed");
+                }
+                else
+                {
+                    Console.WriteLine($"✗ Semantic analysis had warnings/errors:");
+                    foreach (var error in semanticAnalyzer.Errors)
+                    {
+                        Console.WriteLine($"  {error}");
+                    }
+                }
+
+                // IR generation
+                var irBuilder = new IRBuilder(semanticAnalyzer);
+                var irModule = irBuilder.Build(ast, "OptionalParamArray");
+                Console.WriteLine($"✓ IR generation: {irModule.Functions.Count} functions");
+
+                // Check IR for optional/paramarray parameters
+                foreach (var func in irModule.Functions)
+                {
+                    var optParams = func.Parameters.Where(p => p.IsOptional).ToList();
+                    var paramArrayParams = func.Parameters.Where(p => p.IsParamArray).ToList();
+                    var byRefParams = func.Parameters.Where(p => p.IsByRef).ToList();
+
+                    if (optParams.Count > 0 || paramArrayParams.Count > 0 || byRefParams.Count > 0)
+                    {
+                        Console.WriteLine($"  {func.Name}: {optParams.Count} optional, {paramArrayParams.Count} ParamArray, {byRefParams.Count} ByRef params");
+                    }
+                }
+
+                // Generate C# code
+                Console.WriteLine("\n" + "-".PadRight(40, '-'));
+                Console.WriteLine("Generated C# Code:");
+                Console.WriteLine("-".PadRight(40, '-'));
+
+                var csharpCode = CompileToCSharp(source, "OptionalParamArray");
+                if (csharpCode != null)
+                {
+                    Console.WriteLine(csharpCode);
+                    SaveToFile("OptionalParamArray.cs", csharpCode);
                 }
             }
             catch (Exception ex)

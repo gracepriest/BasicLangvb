@@ -50,6 +50,7 @@ namespace BasicLang.Compiler.AST
         void Visit(DoLoopNode node);
         void Visit(ForEachLoopNode node);
         void Visit(WithStatementNode node);
+        void Visit(ImplicitWithMemberNode node);
         void Visit(TryStatementNode node);
         void Visit(CatchClauseNode node);
         void Visit(ThrowStatementNode node);
@@ -239,14 +240,15 @@ namespace BasicLang.Compiler.AST
         public string BaseClass { get; set; }
         public List<string> Interfaces { get; set; }
         public List<ASTNode> Members { get; set; }
-        
+        public bool IsAbstract { get; set; }  // MustInherit
+
         public ClassNode(int line, int column) : base(line, column)
         {
             GenericParameters = new List<string>();
             Interfaces = new List<string>();
             Members = new List<ASTNode>();
         }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     
@@ -265,6 +267,14 @@ namespace BasicLang.Compiler.AST
         }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+
+        /// <summary>
+        /// Check if a method has a default implementation (body)
+        /// </summary>
+        public bool HasDefaultImplementation(FunctionNode method)
+        {
+            return method.Body != null && method.Body.Statements.Count > 0;
+        }
     }
 
     public class EnumNode : ASTNode
@@ -350,9 +360,12 @@ namespace BasicLang.Compiler.AST
         public string Name { get; set; }
         public TypeReference Type { get; set; }
         public ExpressionNode DefaultValue { get; set; }
-        
+        public bool IsOptional { get; set; }
+        public bool IsParamArray { get; set; }
+        public bool IsByRef { get; set; }
+
         public ParameterNode(int line, int column) : base(line, column) { }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     
@@ -368,6 +381,7 @@ namespace BasicLang.Compiler.AST
         public bool IsStatic { get; set; }       // Shared
         public bool IsVirtual { get; set; }      // Overridable
         public bool IsOverride { get; set; }     // Overrides
+        public bool IsAbstract { get; set; }     // MustOverride
         public bool IsSealed { get; set; }       // NotOverridable
 
         // Async modifier
@@ -947,6 +961,18 @@ namespace BasicLang.Compiler.AST
         public BlockNode Body { get; set; }
 
         public WithStatementNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Implicit With member access: .Member inside a With block
+    /// </summary>
+    public class ImplicitWithMemberNode : ExpressionNode
+    {
+        public string MemberName { get; set; }
+
+        public ImplicitWithMemberNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }

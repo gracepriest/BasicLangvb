@@ -28,6 +28,26 @@ declare i32 @rand()
 declare void @srand(i32)
 declare i64 @time(i64*)
 
+; String functions
+declare i64 @strlen(i8*)
+declare i8* @strcpy(i8*, i8*)
+declare i8* @strcat(i8*, i8*)
+declare i8* @malloc(i64)
+declare void @free(i8*)
+
+; String concatenation helper
+define i8* @__concat_strings(i8* %s1, i8* %s2) {
+entry:
+  %len1 = call i64 @strlen(i8* %s1)
+  %len2 = call i64 @strlen(i8* %s2)
+  %total = add i64 %len1, %len2
+  %total1 = add i64 %total, 1
+  %buf = call i8* @malloc(i64 %total1)
+  call i8* @strcpy(i8* %buf, i8* %s1)
+  call i8* @strcat(i8* %buf, i8* %s2)
+  ret i8* %buf
+}
+
 define void @Main() {
 entry:
   %x.addr = alloca double

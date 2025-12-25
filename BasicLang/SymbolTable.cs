@@ -24,6 +24,7 @@ public class TypeInfo
         public int ArraySize { get; set; } // Size of array (for fixed-size arrays)
         public bool IsPointer { get; set; }
         public bool IsNullable { get; set; }
+        public bool IsAbstract { get; set; } // For abstract classes
         public Dictionary<string, Symbol> Members { get; set; }
 
         public TypeInfo(string name, TypeKind kind)
@@ -174,6 +175,11 @@ public class TypeInfo
         // For functions/methods
         public List<Symbol> Parameters { get; set; }
         public TypeInfo ReturnType { get; set; }
+
+        // For parameters
+        public bool IsOptional { get; set; }
+        public bool IsParamArray { get; set; }
+        public bool IsByRef { get; set; }
         
         // For classes
         public List<TypeInfo> GenericParameters { get; set; }
@@ -367,10 +373,12 @@ public class TypeInfo
         public TypeInfo VoidType { get; }
         public TypeInfo ObjectType { get; }
         
+        public TypeInfo ExceptionType { get; }
+
         public TypeManager()
         {
             _types = new Dictionary<string, TypeInfo>(StringComparer.OrdinalIgnoreCase);
-            
+
             // Define built-in types
             IntegerType = DefineBuiltInType("Integer", TypeKind.Primitive);
             LongType = DefineBuiltInType("Long", TypeKind.Primitive);
@@ -381,6 +389,12 @@ public class TypeInfo
             CharType = DefineBuiltInType("Char", TypeKind.Primitive);
             VoidType = DefineBuiltInType("Void", TypeKind.Void);
             ObjectType = DefineBuiltInType("Object", TypeKind.Class);
+            ExceptionType = DefineBuiltInType("Exception", TypeKind.Class);
+
+            // Add members to Exception type
+            ExceptionType.Members["Message"] = new Symbol("Message", SymbolKind.Property, StringType, 0, 0);
+            ExceptionType.Members["StackTrace"] = new Symbol("StackTrace", SymbolKind.Property, StringType, 0, 0);
+            ExceptionType.Members["InnerException"] = new Symbol("InnerException", SymbolKind.Property, ExceptionType, 0, 0);
         }
         
         private TypeInfo DefineBuiltInType(string name, TypeKind kind)

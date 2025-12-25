@@ -72,8 +72,8 @@
     stloc.0
     ldc.i4.s 10
     stloc.1
-    ldloc.0
-    ldloc.1
+    ldc.i4.5
+    ldc.i4.s 10
     call int32 DoubleSumDemo::AddDoubled(int32, int32)
     stloc.2
     ldloc.2

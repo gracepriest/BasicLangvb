@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
+#include <functional>
 #include <memory>
 
 using namespace std;
@@ -20,9 +21,8 @@ void Main()
     double x = 0.0;
     double result = 0.0;
 
-
     x = 16;
-    result = sqrt(x);
+    result = sqrt(16);
     cout << result << endl;
     result = abs(-5.5);
     cout << result << endl;

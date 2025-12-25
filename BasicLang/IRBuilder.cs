@@ -189,7 +189,14 @@ namespace BasicLang.Compiler.IR
             foreach (var param in node.Parameters)
             {
                 var paramType = _semanticAnalyzer.GetNodeType(param);
-                var irParam = new IRVariable(param.Name, paramType) { IsParameter = true };
+                var irParam = new IRVariable(param.Name, paramType)
+                {
+                    IsParameter = true,
+                    IsOptional = param.IsOptional,
+                    IsParamArray = param.IsParamArray,
+                    IsByRef = param.IsByRef,
+                    DefaultValue = BuildExpressionValue(param.DefaultValue)
+                };
                 _currentFunction.Parameters.Add(irParam);
                 PushVariableVersion(param.Name, irParam);
             }
@@ -247,7 +254,14 @@ namespace BasicLang.Compiler.IR
             foreach (var param in node.Parameters)
             {
                 var paramType = _semanticAnalyzer.GetNodeType(param);
-                var irParam = new IRVariable(param.Name, paramType) { IsParameter = true };
+                var irParam = new IRVariable(param.Name, paramType)
+                {
+                    IsParameter = true,
+                    IsOptional = param.IsOptional,
+                    IsParamArray = param.IsParamArray,
+                    IsByRef = param.IsByRef,
+                    DefaultValue = BuildExpressionValue(param.DefaultValue)
+                };
                 _currentFunction.Parameters.Add(irParam);
                 PushVariableVersion(param.Name, irParam);
             }
@@ -390,7 +404,8 @@ namespace BasicLang.Compiler.IR
             var irClass = new IRClass(node.Name)
             {
                 BaseClass = node.BaseClass,
-                Namespace = _currentNamespace
+                Namespace = _currentNamespace,
+                IsAbstract = node.IsAbstract
             };
 
             // Copy generic parameters
@@ -435,6 +450,7 @@ namespace BasicLang.Compiler.IR
                         IsStatic = funcNode.IsStatic,
                         IsVirtual = funcNode.IsVirtual,
                         IsOverride = funcNode.IsOverride,
+                        IsAbstract = funcNode.IsAbstract,
                         IsSealed = funcNode.IsSealed,
                         Implementation = _module.Functions.LastOrDefault()
                     };
@@ -453,6 +469,7 @@ namespace BasicLang.Compiler.IR
                         IsStatic = subNode.IsStatic,
                         IsVirtual = subNode.IsVirtual,
                         IsOverride = subNode.IsOverride,
+                        IsAbstract = subNode.IsAbstract,
                         IsSealed = subNode.IsSealed,
                         Implementation = _module.Functions.LastOrDefault()
                     };
@@ -537,7 +554,8 @@ namespace BasicLang.Compiler.IR
                 var irMethod = new IRInterfaceMethod
                 {
                     Name = method.Name,
-                    ReturnType = new TypeInfo(method.ReturnType?.Name ?? "Void", TypeKind.Primitive)
+                    ReturnType = new TypeInfo(method.ReturnType?.Name ?? "Void", TypeKind.Primitive),
+                    HasDefaultImplementation = !method.IsAbstract && method.Body != null
                 };
 
                 foreach (var param in method.Parameters)
@@ -545,8 +563,55 @@ namespace BasicLang.Compiler.IR
                     irMethod.Parameters.Add(new IRParameter
                     {
                         Name = param.Name,
-                        TypeName = param.Type?.Name ?? "Object"
+                        TypeName = param.Type?.Name ?? "Object",
+                        IsOptional = param.IsOptional,
+                        IsParamArray = param.IsParamArray,
+                        IsByRef = param.IsByRef,
+                        DefaultValue = BuildExpressionValue(param.DefaultValue)
                     });
+                }
+
+                // Generate IR for default implementation if present
+                if (!method.IsAbstract && method.Body != null)
+                {
+                    var implFunctionName = $"{node.Name}.{method.Name}_DefaultImpl";
+                    var savedFunction = _currentFunction;
+                    var savedBlock = _currentBlock;
+
+                    _currentFunction = _module.CreateFunction(implFunctionName, new TypeInfo(method.ReturnType?.Name ?? "Void", TypeKind.Primitive));
+
+                    // Add parameters
+                    foreach (var param in method.Parameters)
+                    {
+                        var paramType = _semanticAnalyzer.GetNodeType(param);
+                        var irParam = new IRVariable(param.Name, paramType) { IsParameter = true };
+                        _currentFunction.Parameters.Add(irParam);
+                        PushVariableVersion(param.Name, irParam);
+                    }
+
+                    // Create entry block and generate body
+                    _currentBlock = _currentFunction.CreateBlock("entry");
+                    method.Body.Accept(this);
+
+                    // Ensure function ends with return
+                    if (!_currentBlock.IsTerminated())
+                    {
+                        if (method.ReturnType == null || method.ReturnType.Name == "Void")
+                            EmitInstruction(new IRReturn());
+                        else
+                            EmitInstruction(new IRReturn(CreateDefaultValue(new TypeInfo(method.ReturnType.Name, TypeKind.Primitive))));
+                    }
+
+                    // Clean up
+                    foreach (var param in method.Parameters)
+                    {
+                        PopVariableVersion(param.Name);
+                    }
+
+                    irMethod.DefaultImplementation = _currentFunction;
+
+                    _currentFunction = savedFunction;
+                    _currentBlock = savedBlock;
                 }
 
                 irInterface.Methods.Add(irMethod);
@@ -650,7 +715,11 @@ namespace BasicLang.Compiler.IR
                 irDelegate.Parameters.Add(new IRParameter
                 {
                     Name = param.Name,
-                    TypeName = param.Type?.Name ?? "Object"
+                    TypeName = param.Type?.Name ?? "Object",
+                    IsOptional = param.IsOptional,
+                    IsParamArray = param.IsParamArray,
+                    IsByRef = param.IsByRef,
+                    DefaultValue = BuildExpressionValue(param.DefaultValue)
                 });
             }
 
@@ -692,7 +761,11 @@ namespace BasicLang.Compiler.IR
                 externInfo.Parameters.Add(new IRParameter
                 {
                     Name = param.Name,
-                    TypeName = param.Type?.Name ?? "Object"
+                    TypeName = param.Type?.Name ?? "Object",
+                    IsOptional = param.IsOptional,
+                    IsParamArray = param.IsParamArray,
+                    IsByRef = param.IsByRef,
+                    DefaultValue = BuildExpressionValue(param.DefaultValue)
                 });
             }
 
@@ -1237,6 +1310,96 @@ namespace BasicLang.Compiler.IR
             }
         }
 
+        public void Visit(LinqQueryExpressionNode node)
+        {
+            // LINQ queries are converted to method chain calls
+            // Store the query as a special IR node for code generation
+            IRValue result = null;
+
+            foreach (var clause in node.Clauses)
+            {
+                switch (clause)
+                {
+                    case FromClause from:
+                        from.Collection?.Accept(this);
+                        result = _expressionResult;
+                        break;
+                    case WhereClause where:
+                        where.Condition?.Accept(this);
+                        var whereCondition = _expressionResult;
+                        var whereCall = new IRCall(
+                            _currentFunction.GetNextTempName(),
+                            "Where",
+                            new TypeInfo("IEnumerable", TypeKind.Interface));
+                        if (result != null) whereCall.Arguments.Add(result);
+                        whereCall.Arguments.Add(whereCondition);
+                        EmitInstruction(whereCall);
+                        result = whereCall;
+                        break;
+                    case SelectClause select:
+                        select.Selector?.Accept(this);
+                        var selectExpr = _expressionResult;
+                        var selectCall = new IRCall(
+                            _currentFunction.GetNextTempName(),
+                            "Select",
+                            new TypeInfo("IEnumerable", TypeKind.Interface));
+                        if (result != null) selectCall.Arguments.Add(result);
+                        selectCall.Arguments.Add(selectExpr);
+                        EmitInstruction(selectCall);
+                        result = selectCall;
+                        break;
+                    case OrderByClause orderBy:
+                        orderBy.KeySelector?.Accept(this);
+                        var orderKey = _expressionResult;
+                        var orderMethod = orderBy.Descending ? "OrderByDescending" : "OrderBy";
+                        var orderCall = new IRCall(
+                            _currentFunction.GetNextTempName(),
+                            orderMethod,
+                            new TypeInfo("IOrderedEnumerable", TypeKind.Interface));
+                        if (result != null) orderCall.Arguments.Add(result);
+                        orderCall.Arguments.Add(orderKey);
+                        EmitInstruction(orderCall);
+                        result = orderCall;
+                        break;
+                    case TakeClause take:
+                        take.Count?.Accept(this);
+                        var takeCount = _expressionResult;
+                        var takeCall = new IRCall(
+                            _currentFunction.GetNextTempName(),
+                            "Take",
+                            new TypeInfo("IEnumerable", TypeKind.Interface));
+                        if (result != null) takeCall.Arguments.Add(result);
+                        takeCall.Arguments.Add(takeCount);
+                        EmitInstruction(takeCall);
+                        result = takeCall;
+                        break;
+                    case SkipClause skip:
+                        skip.Count?.Accept(this);
+                        var skipCount = _expressionResult;
+                        var skipCall = new IRCall(
+                            _currentFunction.GetNextTempName(),
+                            "Skip",
+                            new TypeInfo("IEnumerable", TypeKind.Interface));
+                        if (result != null) skipCall.Arguments.Add(result);
+                        skipCall.Arguments.Add(skipCount);
+                        EmitInstruction(skipCall);
+                        result = skipCall;
+                        break;
+                    case DistinctClause:
+                        var distinctCall = new IRCall(
+                            _currentFunction.GetNextTempName(),
+                            "Distinct",
+                            new TypeInfo("IEnumerable", TypeKind.Interface));
+                        if (result != null) distinctCall.Arguments.Add(result);
+                        EmitInstruction(distinctCall);
+                        result = distinctCall;
+                        break;
+                }
+            }
+
+            _expressionResult = result;
+        }
+
         // ====================================================================
         // Statements
         // ====================================================================
@@ -1541,6 +1704,9 @@ namespace BasicLang.Compiler.IR
             _currentBlock = endBlock;
         }
 
+        // Stack of With object variables for nested With blocks
+        private Stack<IRVariable> _withObjectStack = new Stack<IRVariable>();
+
         public void Visit(WithStatementNode node)
         {
             // Evaluate the With object expression
@@ -1552,13 +1718,35 @@ namespace BasicLang.Compiler.IR
             var withVar = CreateVariable("__with", objType, _nextVersion++);
             EmitInstruction(new IRAssignment(withVar, withObject));
 
+            // Push the With variable for implicit member access
+            _withObjectStack.Push(withVar);
+
             EmitInstruction(new IRComment("With block"));
 
             // Process the body
-            // Note: Full implementation would need to track the With object for implicit member access
             node.Body.Accept(this);
 
+            _withObjectStack.Pop();
             EmitInstruction(new IRComment("End With"));
+        }
+
+        public void Visit(ImplicitWithMemberNode node)
+        {
+            if (_withObjectStack.Count == 0)
+            {
+                // Error already reported by semantic analyzer
+                _expressionResult = new IRConstant(null, new TypeInfo("Object", TypeKind.Class));
+                return;
+            }
+
+            var withVar = _withObjectStack.Peek();
+            var memberType = _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Object", TypeKind.Class);
+
+            // Create a field access for the implicit member
+            var tempName = _currentFunction.GetNextTempName();
+            var fieldAccess = new IRFieldAccess(tempName, withVar, node.MemberName, memberType);
+
+            _expressionResult = fieldAccess;
         }
 
         public void Visit(WhileLoopNode node)
@@ -1875,6 +2063,28 @@ namespace BasicLang.Compiler.IR
 
         private IRValue _expressionResult;
 
+        /// <summary>
+        /// Build an expression and return the result. Used for default parameter values.
+        /// </summary>
+        private IRValue BuildExpressionValue(ExpressionNode expr)
+        {
+            if (expr == null) return null;
+
+            // Handle literal expressions directly
+            if (expr is LiteralExpressionNode literal)
+            {
+                var type = _semanticAnalyzer.GetNodeType(literal);
+                return new IRConstant(literal.Value, type);
+            }
+
+            // For other expressions, visit and capture the result
+            var savedResult = _expressionResult;
+            expr.Accept(this);
+            var result = _expressionResult;
+            _expressionResult = savedResult;
+            return result;
+        }
+
         public void Visit(BinaryExpressionNode node)
         {
             node.Left.Accept(this);
@@ -2088,10 +2298,21 @@ namespace BasicLang.Compiler.IR
                 // Regular function call
                 var call = new IRCall(tempName, idExpr.Name, returnType);
 
-                foreach (var arg in node.Arguments)
+                // Get function symbol to check for ByRef parameters
+                var funcSymbol = _semanticAnalyzer.GetNodeSymbol(node.Callee);
+
+                for (int i = 0; i < node.Arguments.Count; i++)
                 {
-                    arg.Accept(this);
+                    node.Arguments[i].Accept(this);
                     call.Arguments.Add(_expressionResult);
+
+                    // Check if this parameter is ByRef
+                    bool isByRef = false;
+                    if (funcSymbol?.Parameters != null && i < funcSymbol.Parameters.Count)
+                    {
+                        isByRef = funcSymbol.Parameters[i].IsByRef;
+                    }
+                    call.ByRefArguments.Add(isByRef);
                 }
 
                 EmitInstruction(call);

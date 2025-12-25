@@ -22,11 +22,11 @@ namespace GeneratedCode
             i = 2;
             while (i <= (n / 2))
             {
-                if ((n % i) == 0)
+                if ((n % 2) == 0)
                 {
                     return false;
                 }
-                i = i + 1;
+                i = 3;
             }
             return true;
         }
@@ -40,13 +40,13 @@ namespace GeneratedCode
             i = 2;
             while (i <= max)
             {
-                if (IsPrime(i))
+                if (IsPrime(2))
                 {
-                    count = count + 1;
+                    count = 1;
                 }
-                i = i + 1;
+                i = 3;
             }
-            return count;
+            return 0;
         }
 
         public static void Main()

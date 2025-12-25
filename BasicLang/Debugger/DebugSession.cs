@@ -20,7 +20,7 @@ namespace BasicLang.Debugger
     {
         private readonly Stream _input;
         private readonly Stream _output;
-        private readonly Dictionary<string, HashSet<int>> _breakpoints = new();
+        private readonly Dictionary<int, Breakpoint> _breakpoints = new();
         private readonly Dictionary<int, VariableInfo> _variables = new();
         private readonly List<StackFrameInfo> _stackFrames = new();
 
@@ -30,6 +30,7 @@ namespace BasicLang.Debugger
         private bool _stopOnEntry;
         private int _nextVariableRef = 1;
         private int _seq = 0;
+        private int _nextBreakpointId = 1;
 
         public DebugSession(Stream input, Stream output)
         {
@@ -73,6 +74,7 @@ namespace BasicLang.Debugger
                     "initialize" => HandleInitialize(message),
                     "launch" => await HandleLaunchAsync(message),
                     "setBreakpoints" => HandleSetBreakpoints(message),
+                    "setFunctionBreakpoints" => HandleSetFunctionBreakpoints(message),
                     "configurationDone" => HandleConfigurationDone(message),
                     "threads" => HandleThreads(message),
                     "stackTrace" => HandleStackTrace(message),
@@ -102,8 +104,10 @@ namespace BasicLang.Debugger
             response.Body = new Dictionary<string, object>
             {
                 ["supportsConfigurationDoneRequest"] = true,
-                ["supportsFunctionBreakpoints"] = false,
-                ["supportsConditionalBreakpoints"] = false,
+                ["supportsFunctionBreakpoints"] = true,
+                ["supportsConditionalBreakpoints"] = true,
+                ["supportsHitConditionalBreakpoints"] = true,
+                ["supportsLogPoints"] = true,
                 ["supportsEvaluateForHovers"] = true,
                 ["supportsStepBack"] = false,
                 ["supportsSetVariable"] = false,
@@ -162,17 +166,16 @@ namespace BasicLang.Debugger
                     var module = irBuilder.Build(ast);
 
                     _interpreter = new DebuggableInterpreter(module);
+                    _interpreter.SetCurrentFile(_currentFile);
                     _interpreter.BreakpointHit += OnBreakpointHit;
                     _interpreter.StepComplete += OnStepComplete;
                     _interpreter.OutputProduced += OnOutputProduced;
+                    _interpreter.LogpointHit += OnLogpointHit;
 
                     // Set breakpoints
-                    foreach (var bp in _breakpoints)
+                    foreach (var bp in _breakpoints.Values)
                     {
-                        foreach (var line in bp.Value)
-                        {
-                            _interpreter.SetBreakpoint(bp.Key, line);
-                        }
+                        _interpreter.AddBreakpoint(bp);
                     }
 
                     _running = true;
@@ -208,7 +211,18 @@ namespace BasicLang.Debugger
                 source.TryGetProperty("path", out var pathProp))
             {
                 var path = pathProp.GetString();
-                _breakpoints[path] = new HashSet<int>();
+
+                // Clear existing breakpoints for this file
+                var toRemove = _breakpoints.Where(kvp =>
+                    string.Equals(kvp.Value.FilePath, path, StringComparison.OrdinalIgnoreCase))
+                    .Select(kvp => kvp.Key)
+                    .ToList();
+
+                foreach (var id in toRemove)
+                {
+                    _breakpoints.Remove(id);
+                    _interpreter?.RemoveBreakpoint(id);
+                }
 
                 if (args.TryGetProperty("breakpoints", out var bpArray))
                 {
@@ -217,15 +231,67 @@ namespace BasicLang.Debugger
                         if (bp.TryGetProperty("line", out var lineProp))
                         {
                             var line = lineProp.GetInt32();
-                            _breakpoints[path].Add(line);
+                            var column = 0;
 
-                            breakpoints.Add(new Dictionary<string, object>
+                            if (bp.TryGetProperty("column", out var colProp))
                             {
-                                ["verified"] = true,
-                                ["line"] = line
-                            });
+                                column = colProp.GetInt32();
+                            }
 
-                            _interpreter?.SetBreakpoint(path, line);
+                            var breakpoint = new Breakpoint
+                            {
+                                FilePath = path,
+                                Line = line,
+                                Column = column,
+                                Type = BreakpointType.Line
+                            };
+
+                            // Check for conditional breakpoint
+                            if (bp.TryGetProperty("condition", out var condProp) &&
+                                !string.IsNullOrWhiteSpace(condProp.GetString()))
+                            {
+                                breakpoint.Type = BreakpointType.Conditional;
+                                breakpoint.Condition = condProp.GetString();
+                            }
+
+                            // Check for hit count condition
+                            if (bp.TryGetProperty("hitCondition", out var hitCondProp) &&
+                                !string.IsNullOrWhiteSpace(hitCondProp.GetString()))
+                            {
+                                breakpoint.Type = BreakpointType.HitCount;
+                                ParseHitCondition(hitCondProp.GetString(), breakpoint);
+                            }
+
+                            // Check for logpoint
+                            if (bp.TryGetProperty("logMessage", out var logMsgProp) &&
+                                !string.IsNullOrWhiteSpace(logMsgProp.GetString()))
+                            {
+                                breakpoint.Type = BreakpointType.Logpoint;
+                                breakpoint.LogMessage = logMsgProp.GetString();
+                            }
+
+                            // Validate breakpoint (would need source code access)
+                            breakpoint.Verified = true; // For now, always verified
+
+                            var id = _nextBreakpointId++;
+                            breakpoint.Id = id;
+                            _breakpoints[id] = breakpoint;
+                            _interpreter?.AddBreakpoint(breakpoint);
+
+                            var bpResponse = new Dictionary<string, object>
+                            {
+                                ["id"] = id,
+                                ["verified"] = breakpoint.Verified,
+                                ["line"] = breakpoint.Line
+                            };
+
+                            if (column > 0)
+                                bpResponse["column"] = column;
+
+                            if (!breakpoint.Verified && !string.IsNullOrEmpty(breakpoint.Message))
+                                bpResponse["message"] = breakpoint.Message;
+
+                            breakpoints.Add(bpResponse);
                         }
                     }
                 }
@@ -237,6 +303,136 @@ namespace BasicLang.Debugger
                 ["breakpoints"] = breakpoints
             };
             return response;
+        }
+
+        private DAPResponse HandleSetFunctionBreakpoints(DAPMessage request)
+        {
+            var args = request.Arguments;
+            var breakpoints = new List<object>();
+
+            // Clear existing function breakpoints
+            var toRemove = _breakpoints.Where(kvp =>
+                kvp.Value.Type == BreakpointType.Function)
+                .Select(kvp => kvp.Key)
+                .ToList();
+
+            foreach (var id in toRemove)
+            {
+                _breakpoints.Remove(id);
+                _interpreter?.RemoveBreakpoint(id);
+            }
+
+            if (args.TryGetProperty("breakpoints", out var bpArray))
+            {
+                foreach (var bp in bpArray.EnumerateArray())
+                {
+                    if (bp.TryGetProperty("name", out var nameProp))
+                    {
+                        var functionName = nameProp.GetString();
+
+                        var breakpoint = new Breakpoint
+                        {
+                            Type = BreakpointType.Function,
+                            FunctionName = functionName,
+                            Verified = true
+                        };
+
+                        // Check for condition on function breakpoint
+                        if (bp.TryGetProperty("condition", out var condProp) &&
+                            !string.IsNullOrWhiteSpace(condProp.GetString()))
+                        {
+                            breakpoint.Condition = condProp.GetString();
+                        }
+
+                        // Check for hit condition
+                        if (bp.TryGetProperty("hitCondition", out var hitCondProp) &&
+                            !string.IsNullOrWhiteSpace(hitCondProp.GetString()))
+                        {
+                            ParseHitCondition(hitCondProp.GetString(), breakpoint);
+                        }
+
+                        var id = _nextBreakpointId++;
+                        breakpoint.Id = id;
+                        _breakpoints[id] = breakpoint;
+                        _interpreter?.AddBreakpoint(breakpoint);
+
+                        breakpoints.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = id,
+                            ["verified"] = breakpoint.Verified
+                        });
+                    }
+                }
+            }
+
+            var response = CreateResponse(request, true);
+            response.Body = new Dictionary<string, object>
+            {
+                ["breakpoints"] = breakpoints
+            };
+            return response;
+        }
+
+        private void ParseHitCondition(string hitCondition, Breakpoint breakpoint)
+        {
+            // Format: "== 5", "> 10", "% 3 == 0", etc.
+            hitCondition = hitCondition.Trim();
+
+            if (hitCondition.StartsWith("=="))
+            {
+                if (int.TryParse(hitCondition.Substring(2).Trim(), out var value))
+                {
+                    breakpoint.HitCountCondition = HitCountCondition.Equals;
+                    breakpoint.HitCountTarget = value;
+                }
+            }
+            else if (hitCondition.StartsWith(">="))
+            {
+                if (int.TryParse(hitCondition.Substring(2).Trim(), out var value))
+                {
+                    breakpoint.HitCountCondition = HitCountCondition.GreaterThanOrEquals;
+                    breakpoint.HitCountTarget = value;
+                }
+            }
+            else if (hitCondition.StartsWith(">"))
+            {
+                if (int.TryParse(hitCondition.Substring(1).Trim(), out var value))
+                {
+                    breakpoint.HitCountCondition = HitCountCondition.GreaterThan;
+                    breakpoint.HitCountTarget = value;
+                }
+            }
+            else if (hitCondition.StartsWith("<="))
+            {
+                if (int.TryParse(hitCondition.Substring(2).Trim(), out var value))
+                {
+                    breakpoint.HitCountCondition = HitCountCondition.LessThanOrEquals;
+                    breakpoint.HitCountTarget = value;
+                }
+            }
+            else if (hitCondition.StartsWith("<"))
+            {
+                if (int.TryParse(hitCondition.Substring(1).Trim(), out var value))
+                {
+                    breakpoint.HitCountCondition = HitCountCondition.LessThan;
+                    breakpoint.HitCountTarget = value;
+                }
+            }
+            else if (hitCondition.StartsWith("%"))
+            {
+                // Format: "% 3" means every 3rd hit
+                if (int.TryParse(hitCondition.Substring(1).Trim(), out var value))
+                {
+                    breakpoint.HitCountCondition = HitCountCondition.Modulo;
+                    breakpoint.HitCountTarget = value;
+                }
+            }
+            else if (int.TryParse(hitCondition, out var value))
+            {
+                // Just a number means "equals"
+                breakpoint.HitCountCondition = HitCountCondition.Equals;
+                breakpoint.HitCountTarget = value;
+            }
         }
 
         private DAPResponse HandleConfigurationDone(DAPMessage request)
@@ -447,6 +643,21 @@ namespace BasicLang.Debugger
             {
                 ["category"] = "stdout",
                 ["output"] = e.Text
+            }));
+        }
+
+        private void OnLogpointHit(object sender, LogpointEventArgs e)
+        {
+            Task.Run(() => SendEventAsync("output", new Dictionary<string, object>
+            {
+                ["category"] = "console",
+                ["output"] = $"[Logpoint] {e.Message}\n",
+                ["source"] = new Dictionary<string, object>
+                {
+                    ["path"] = e.File,
+                    ["name"] = Path.GetFileName(e.File)
+                },
+                ["line"] = e.Line
             }));
         }
 

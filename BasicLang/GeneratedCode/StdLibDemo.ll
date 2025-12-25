@@ -28,6 +28,26 @@ declare i32 @rand()
 declare void @srand(i32)
 declare i64 @time(i64*)
 
+; String functions
+declare i64 @strlen(i8*)
+declare i8* @strcpy(i8*, i8*)
+declare i8* @strcat(i8*, i8*)
+declare i8* @malloc(i64)
+declare void @free(i8*)
+
+; String concatenation helper
+define i8* @__concat_strings(i8* %s1, i8* %s2) {
+entry:
+  %len1 = call i64 @strlen(i8* %s1)
+  %len2 = call i64 @strlen(i8* %s2)
+  %total = add i64 %len1, %len2
+  %total1 = add i64 %total, 1
+  %buf = call i8* @malloc(i64 %total1)
+  call i8* @strcpy(i8* %buf, i8* %s1)
+  call i8* @strcat(i8* %buf, i8* %s2)
+  ret i8* %buf
+}
+
 define void @Main() {
 entry:
   %x.addr = alloca double
@@ -36,19 +56,18 @@ entry:
   store double 0.0, double* %result.addr
 
   store double 16, double* %x.addr
-  %t0 = load double, double* %x.addr
-  %t1 = call double @sqrt(double %t0)
-  store double %t1, double* %result.addr
-  %t2 = load double, double* %result.addr
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.0, i64 0, i64 0), double %t2)
-  %t3 = call double @fabs(double -5.5)
-  store double %t3, double* %result.addr
-  %t4 = load double, double* %result.addr
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.0, i64 0, i64 0), double %t4)
-  %t5 = call double @pow(i32 2, i32 8)
-  store double %t5, double* %result.addr
-  %t6 = load double, double* %result.addr
-  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.0, i64 0, i64 0), double %t6)
+  %t0 = call double @sqrt(double 16)
+  store double %t0, double* %result.addr
+  %t1 = load double, double* %result.addr
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.0, i64 0, i64 0), double %t1)
+  %t2 = call double @fabs(double -5.5)
+  store double %t2, double* %result.addr
+  %t3 = load double, double* %result.addr
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.0, i64 0, i64 0), double %t3)
+  %t4 = call double @pow(i32 2, i32 8)
+  store double %t4, double* %result.addr
+  %t5 = load double, double* %result.addr
+  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.0, i64 0, i64 0), double %t5)
   ret void
 }
 
