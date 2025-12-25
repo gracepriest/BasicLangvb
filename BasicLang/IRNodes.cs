@@ -714,6 +714,8 @@ namespace BasicLang.Compiler.IR
         public bool IsIterator { get; set; }
         public bool IsExtension { get; set; }
         public string ExtendedType { get; set; }
+        public bool IsLambda { get; set; }
+        public List<(string name, TypeInfo type)> CapturedVariables { get; set; }
 
         private int _nextBlockId = 0;
         private int _nextTempId = 0;
@@ -726,6 +728,7 @@ namespace BasicLang.Compiler.IR
             Blocks = new List<BasicBlock>();
             LocalVariables = new List<IRVariable>();
             GenericParameters = new List<string>();
+            CapturedVariables = new List<(string name, TypeInfo type)>();
         }
         
         public BasicBlock CreateBlock(string name = null)
@@ -1031,10 +1034,12 @@ namespace BasicLang.Compiler.IR
         public bool IsSealed { get; set; }
         public List<IRVariable> Parameters { get; set; }
         public IRFunction Implementation { get; set; }
+        public List<string> GenericParameters { get; set; }
 
         public IRMethod()
         {
             Parameters = new List<IRVariable>();
+            GenericParameters = new List<string>();
         }
     }
 

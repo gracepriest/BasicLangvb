@@ -1,0 +1,73 @@
+Class Animal
+    Public Overridable Function Speak() As String
+        Return "..."
+    End Function
+
+    Public Overridable Function Move() As String
+        Return "Moving"
+    End Function
+End Class
+
+Class Dog
+    Inherits Animal
+
+    Public Overrides Function Speak() As String
+        Return "Woof!"
+    End Function
+
+    Public Overrides Function Move() As String
+        Dim baseMove As String
+        baseMove = MyBase.Move()
+        Return baseMove & " with four legs"
+    End Function
+End Class
+
+Class GuardDog
+    Inherits Dog
+
+    Public Overrides Function Speak() As String
+        Return "WOOF WOOF!"
+    End Function
+End Class
+
+MustInherit Class Shape
+    Public MustOverride Function Area() As Double
+
+    Public Overridable Function Description() As String
+        Return "A shape"
+    End Function
+End Class
+
+Class Circle
+    Inherits Shape
+
+    Private _radius As Double
+
+    Sub New(radius As Double)
+        _radius = radius
+    End Sub
+
+    Public Overrides Function Area() As Double
+        Return 3.14159 * _radius * _radius
+    End Function
+
+    Public NotOverridable Overrides Function Description() As String
+        Return "A circle with radius " & _radius.ToString()
+    End Function
+End Class
+
+Sub Main()
+    Dim animal As Animal
+    animal = New Dog()
+    Print animal.Speak()
+    Print animal.Move()
+
+    Dim dog As Dog
+    dog = New Dog()
+    Print dog.Speak()
+
+    Dim circle As Circle
+    circle = New Circle(5.0)
+    Print circle.Area().ToString()
+    Print circle.Description()
+End Sub

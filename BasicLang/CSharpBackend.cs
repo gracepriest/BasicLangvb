@@ -717,6 +717,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var returnType = MapType(method.ReturnType);
             var name = SanitizeName(method.Name);
 
+            // Add generic parameters
+            var genericParams = "";
+            if (method.GenericParameters != null && method.GenericParameters.Count > 0)
+            {
+                genericParams = "<" + string.Join(", ", method.GenericParameters) + ">";
+            }
+
             // Generate parameter list
             var paramList = "";
             if (method.Implementation != null)
@@ -770,7 +777,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             else
             {
-                WriteLine($"{access} {staticMod}{sealedMod}{overrideMod}{abstractMod}{virtualMod}{returnType} {name}({paramList})");
+                WriteLine($"{access} {staticMod}{sealedMod}{overrideMod}{abstractMod}{virtualMod}{returnType} {name}{genericParams}({paramList})");
             }
 
             // Abstract methods don't have a body
@@ -926,6 +933,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             AnalyzeUseCounts(function);
             BuildTempDefinitions(function);
 
+            // Check if this is a lambda - lambdas are generated inline, not as separate functions
+            if (function.IsLambda)
+            {
+                // Lambdas are generated inline where they're used, skip here
+                return;
+            }
+
             // Check if this is an operator overload (generated with op_ prefix)
             // Function names can be "op_Addition" or "ClassName.op_Addition"
             // Check before sanitizing since sanitization removes dots
@@ -1018,6 +1032,112 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine("}");
 
             _currentFunction = null;
+        }
+
+        private string GenerateLambdaExpression(IRFunction lambdaFunc)
+        {
+            var sb = new StringBuilder();
+
+            // Generate parameters
+            var paramList = new List<string>();
+            foreach (var param in lambdaFunc.Parameters)
+            {
+                var paramName = SanitizeName(param.Name);
+                if (param.Type != null)
+                {
+                    // Explicitly typed lambda parameter
+                    var paramType = MapType(param.Type);
+                    paramList.Add($"{paramType} {paramName}");
+                }
+                else
+                {
+                    // Inferred type
+                    paramList.Add(paramName);
+                }
+            }
+
+            var parameters = string.Join(", ", paramList);
+
+            // Handle zero parameters
+            if (paramList.Count == 0)
+            {
+                sb.Append("() => ");
+            }
+            // Single parameter without explicit type can omit parentheses
+            else if (paramList.Count == 1 && !paramList[0].Contains(' '))
+            {
+                sb.Append($"{parameters} => ");
+            }
+            else
+            {
+                sb.Append($"({parameters}) => ");
+            }
+
+            // Generate body
+            if (lambdaFunc.EntryBlock != null && lambdaFunc.EntryBlock.Instructions.Count > 0)
+            {
+                // Check if it's a simple expression lambda (single return statement)
+                var instructions = lambdaFunc.EntryBlock.Instructions;
+                if (instructions.Count == 1 && instructions[0] is IRReturn ret && ret.Value != null)
+                {
+                    // Single expression lambda: x => x * 2
+                    sb.Append(EmitExpression(ret.Value));
+                }
+                else
+                {
+                    // Statement lambda with block: x => { statements; }
+                    sb.Append("{\n");
+                    var oldIndent = _indentLevel;
+                    _indentLevel++;
+
+                    foreach (var instr in instructions)
+                    {
+                        if (instr is IRReturn retStmt)
+                        {
+                            if (retStmt.Value != null)
+                            {
+                                sb.Append($"{new string(' ', _indentLevel * 4)}return {EmitExpression(retStmt.Value)};\n");
+                            }
+                            else
+                            {
+                                sb.Append($"{new string(' ', _indentLevel * 4)}return;\n");
+                            }
+                        }
+                        else
+                        {
+                            // Handle other statements
+                            sb.Append($"{new string(' ', _indentLevel * 4)}{GenerateInlineStatement(instr)};\n");
+                        }
+                    }
+
+                    _indentLevel = oldIndent;
+                    sb.Append($"{new string(' ', _indentLevel * 4)}}}");
+                }
+            }
+            else
+            {
+                // Empty lambda body
+                sb.Append("{ }");
+            }
+
+            return sb.ToString();
+        }
+
+        private string GenerateInlineStatement(IRInstruction instr)
+        {
+            // Generate statement inline for lambda bodies
+            switch (instr)
+            {
+                case IRStore store:
+                    return $"{EmitExpression(store.Address)} = {EmitExpression(store.Value)}";
+                case IRCall call:
+                    var argExprs = call.Arguments.Select(a => EmitExpression(a)).ToArray();
+                    var fn = SanitizeName(call.FunctionName);
+                    var args = string.Join(", ", argExprs);
+                    return $"{fn}({args})";
+                default:
+                    return EmitExpression(instr as IRValue);
+            }
         }
 
         private void AnalyzeUseCounts(IRFunction function)
@@ -1737,6 +1857,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                         return EmitConstant(c);
 
                     case IRVariable v:
+                        // Check if this is a lambda reference
+                        if (v.Name != null && v.Name.StartsWith("__lambda_"))
+                        {
+                            // Find the lambda function in the module
+                            var lambdaFunc = _currentModule?.Functions.FirstOrDefault(f => f.Name == v.Name);
+                            if (lambdaFunc != null && lambdaFunc.IsLambda)
+                            {
+                                return GenerateLambdaExpression(lambdaFunc);
+                            }
+                        }
+
                         // If it's a real variable, use its name; if it's a temp "register",
                         // try to inline its defining value.
                         if (_declaredIdentifiers.Contains(v.Name) || v.IsParameter || v.IsGlobal)

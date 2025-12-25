@@ -22,7 +22,7 @@ void Main()
     double result = 0.0;
 
     x = 16;
-    result = sqrt(x);
+    result = sqrt(16);
     cout << result << endl;
     result = abs(-5.5);
     cout << result << endl;

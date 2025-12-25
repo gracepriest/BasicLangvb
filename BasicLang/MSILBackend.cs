@@ -519,8 +519,25 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             var returnType = MapType(method.ReturnType);
             var staticMod = method.IsStatic ? "static " : "";
             var instanceMod = method.IsStatic ? "" : "instance ";
-            var virtualMod = method.IsVirtual ? "virtual " : "";
-            var overrideMod = method.IsOverride ? "virtual " : "";
+
+            // Handle virtual/override/abstract/sealed modifiers properly
+            var modifiers = "";
+            if (method.IsAbstract)
+            {
+                modifiers = "abstract virtual ";
+            }
+            else if (method.IsOverride && method.IsSealed)
+            {
+                modifiers = "final virtual ";
+            }
+            else if (method.IsOverride)
+            {
+                modifiers = "virtual ";
+            }
+            else if (method.IsVirtual)
+            {
+                modifiers = "newslot virtual ";
+            }
 
             var paramTypes = "";
             if (method.Implementation != null)
@@ -529,11 +546,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
             }
 
-            WriteLine($"  .method public hidebysig {virtualMod}{overrideMod}{staticMod}");
+            WriteLine($"  .method public hidebysig {modifiers}{staticMod}");
             WriteLine($"          {instanceMod}{returnType} {methodName}({paramTypes}) cil managed");
             WriteLine("  {");
 
-            if (method.Implementation != null)
+            if (method.Implementation != null && !method.IsAbstract)
             {
                 _currentFunction = method.Implementation;
                 InitializeMethodContext(method.Implementation);
@@ -560,8 +577,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _currentFunction = null;
             }
 
-            // Ensure return
-            if (returnType == "void" && !EndsWithRet())
+            // Ensure return for non-abstract methods
+            if (!method.IsAbstract && returnType == "void" && !EndsWithRet())
             {
                 WriteLine("    ret");
             }
@@ -1721,68 +1738,181 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             // Generate newobj instruction
             var className = SanitizeName(newObj.ClassName);
+
             // Load arguments first
             foreach (var arg in newObj.Arguments)
             {
-                if (arg is IRConstant c)
-                    EmitLoadConstant(c);
-                else
-                    WriteLine($"    ldloc {arg.Name}");
+                EmitLoadValue(arg);
             }
-            WriteLine($"    newobj instance void {className}::.ctor()");
-            WriteLine($"    stloc {newObj.Name}");
+
+            // Build constructor signature with parameter types
+            var paramTypes = string.Join(", ", newObj.Arguments.Select(a => MapType(a.Type)));
+
+            // Emit newobj with proper constructor signature
+            WriteLine($"    newobj instance void {className}::.ctor({paramTypes})");
+            _currentStack -= newObj.Arguments.Count; // Arguments consumed
+            _currentStack++; // Object reference pushed
+
+            // Store result if needed
+            if (!string.IsNullOrEmpty(newObj.Name))
+            {
+                if (_declaredIdentifiers.Contains(newObj.Name))
+                {
+                    EmitStoreLocal(newObj.Name);
+                }
+                else
+                {
+                    var tempIdx = GetTempIndex(newObj);
+                    EmitStloc(tempIdx);
+                }
+            }
         }
 
         public override void Visit(IRInstanceMethodCall methodCall)
         {
-            // Load object and arguments, then callvirt
-            WriteLine($"    ldloc {methodCall.Object?.Name}");
+            var hasReturn = methodCall.Type != null && !methodCall.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+            // Load 'this' reference (the object on which the method is called)
+            EmitLoadValue(methodCall.Object);
+
+            // Load arguments
             foreach (var arg in methodCall.Arguments)
             {
-                if (arg is IRConstant c)
-                    EmitLoadConstant(c);
-                else
-                    WriteLine($"    ldloc {arg.Name}");
+                EmitLoadValue(arg);
             }
+
+            // Build method signature
             var returnType = MapType(methodCall.Type);
-            WriteLine($"    callvirt instance {returnType} {methodCall.Object?.Type?.Name}::{methodCall.MethodName}()");
-            if (methodCall.Type != null && methodCall.Type.Name != "Void")
-                WriteLine($"    stloc {methodCall.Name}");
+            var paramTypes = string.Join(", ", methodCall.Arguments.Select(a => MapType(a.Type)));
+            var className = methodCall.Object?.Type?.Name != null ? SanitizeName(methodCall.Object.Type.Name) : "object";
+            var methodName = SanitizeName(methodCall.MethodName);
+
+            // Use callvirt for virtual dispatch (polymorphic behavior)
+            // For non-virtual calls, the backend should use 'call instance' instead, but callvirt is safer as default
+            var callInstruction = methodCall.IsVirtual || !methodCall.IsVirtual ? "callvirt" : "call";
+            WriteLine($"    {callInstruction} instance {returnType} {className}::{methodName}({paramTypes})");
+
+            // Update stack: pop 'this' + args, push return value if any
+            _currentStack -= (1 + methodCall.Arguments.Count);
+            if (hasReturn) _currentStack++;
+
+            // Store result if needed
+            if (hasReturn && !string.IsNullOrEmpty(methodCall.Name))
+            {
+                if (_declaredIdentifiers.Contains(methodCall.Name))
+                {
+                    EmitStoreLocal(methodCall.Name);
+                }
+                else
+                {
+                    var tempIdx = GetTempIndex(methodCall);
+                    EmitStloc(tempIdx);
+                }
+            }
+            else if (hasReturn)
+            {
+                // Discard unused return value
+                WriteLine("    pop");
+                _currentStack--;
+            }
         }
 
         public override void Visit(IRBaseMethodCall baseCall)
         {
-            // Load this and arguments, then call (not callvirt)
+            var hasReturn = baseCall.Type != null && !baseCall.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+            // Load 'this' (ldarg.0 for instance methods)
             WriteLine("    ldarg.0");
+            _currentStack++;
+
+            // Load arguments
             foreach (var arg in baseCall.Arguments)
             {
-                if (arg is IRConstant c)
-                    EmitLoadConstant(c);
-                else
-                    WriteLine($"    ldloc {arg.Name}");
+                EmitLoadValue(arg);
             }
+
+            // Build method signature
             var returnType = MapType(baseCall.Type);
-            WriteLine($"    call instance {returnType} BaseClass::{baseCall.MethodName}()");
-            if (baseCall.Type != null && baseCall.Type.Name != "Void")
-                WriteLine($"    stloc {baseCall.Name}");
+            var paramTypes = string.Join(", ", baseCall.Arguments.Select(a => MapType(a.Type)));
+            var methodName = SanitizeName(baseCall.MethodName);
+
+            // For base calls, we need to know the base class name from the current class context
+            // Use 'call instance' instead of 'callvirt' to call base class method non-virtually
+            // The base class name should come from IRClass.BaseClass - for now use a placeholder
+            var baseClassName = "[mscorlib]System.Object"; // TODO: Get from current class context
+            WriteLine($"    call instance {returnType} {baseClassName}::{methodName}({paramTypes})");
+
+            // Update stack: pop 'this' + args, push return value if any
+            _currentStack -= (1 + baseCall.Arguments.Count);
+            if (hasReturn) _currentStack++;
+
+            // Store result if needed
+            if (hasReturn && !string.IsNullOrEmpty(baseCall.Name))
+            {
+                if (_declaredIdentifiers.Contains(baseCall.Name))
+                {
+                    EmitStoreLocal(baseCall.Name);
+                }
+                else
+                {
+                    var tempIdx = GetTempIndex(baseCall);
+                    EmitStloc(tempIdx);
+                }
+            }
+            else if (hasReturn)
+            {
+                // Discard unused return value
+                WriteLine("    pop");
+                _currentStack--;
+            }
         }
 
         public override void Visit(IRFieldAccess fieldAccess)
         {
-            // Load object and get field
-            WriteLine($"    ldloc {fieldAccess.Object?.Name}");
+            // Load object reference
+            EmitLoadValue(fieldAccess.Object);
+
+            // Load field value from object
             var fieldType = MapType(fieldAccess.Type);
-            WriteLine($"    ldfld {fieldType} {fieldAccess.Object?.Type?.Name}::{fieldAccess.FieldName}");
-            WriteLine($"    stloc {fieldAccess.Name}");
+            var className = fieldAccess.Object?.Type?.Name != null ? SanitizeName(fieldAccess.Object.Type.Name) : "object";
+            var fieldName = SanitizeName(fieldAccess.FieldName);
+
+            WriteLine($"    ldfld {fieldType} {className}::{fieldName}");
+            _currentStack--; // Pop object reference
+            _currentStack++; // Push field value
+
+            // Store result if needed
+            if (!string.IsNullOrEmpty(fieldAccess.Name))
+            {
+                if (_declaredIdentifiers.Contains(fieldAccess.Name))
+                {
+                    EmitStoreLocal(fieldAccess.Name);
+                }
+                else
+                {
+                    var tempIdx = GetTempIndex(fieldAccess);
+                    EmitStloc(tempIdx);
+                }
+            }
         }
 
         public override void Visit(IRFieldStore fieldStore)
         {
-            // Load object, load value, store to field
-            WriteLine($"    ldloc {fieldStore.Object?.Name}");
-            WriteLine($"    ldloc {fieldStore.Value?.Name}");
+            // Load object reference
+            EmitLoadValue(fieldStore.Object);
+
+            // Load value to store
+            EmitLoadValue(fieldStore.Value);
+
+            // Store value to field
             var fieldType = MapType(fieldStore.Value?.Type);
-            WriteLine($"    stfld {fieldType} {fieldStore.Object?.Type?.Name}::{fieldStore.FieldName}");
+            var className = fieldStore.Object?.Type?.Name != null ? SanitizeName(fieldStore.Object.Type.Name) : "object";
+            var fieldName = SanitizeName(fieldStore.FieldName);
+
+            WriteLine($"    stfld {fieldType} {className}::{fieldName}");
+
+            // Update stack: pop object + value
+            _currentStack -= 2;
         }
 
         #endregion

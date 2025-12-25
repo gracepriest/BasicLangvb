@@ -228,22 +228,22 @@
     )
 
     ldc.r8 5
-    newobj instance void Circle::.ctor()
-    stloc t0
+    newobj instance void Circle::.ctor(float64)
+    stloc.1
     ldloc.1
     stloc.0
-    ldloc circle
+    ldloc.0
     callvirt instance float64 Circle::GetArea()
-    stloc t1
+    stloc.2
     ldstr "Circle area: "
     ldloc.2
     call string [mscorlib]System.String::Concat(string, string)
     stloc.3
     ldloc.3
     call void [mscorlib]System.Console::WriteLine(string)
-    ldloc circle
+    ldloc.0
     callvirt instance float64 Circle::GetPerimeter()
-    stloc t3
+    stloc.s 4
     ldstr "Circle perimeter: "
     ldloc.s 4
     call string [mscorlib]System.String::Concat(string, string)

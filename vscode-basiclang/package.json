@@ -41,6 +41,12 @@
         "path": "./syntaxes/basiclang.tmLanguage.json"
       }
     ],
+    "snippets": [
+      {
+        "language": "basiclang",
+        "path": "./snippets/basiclang.json"
+      }
+    ],
     "semanticTokenScopes": [
       {
         "language": "basiclang",
@@ -77,6 +83,26 @@
       {
         "command": "basiclang.showOutput",
         "title": "BasicLang: Show Output"
+      },
+      {
+        "command": "basiclang.build",
+        "title": "BasicLang: Build"
+      },
+      {
+        "command": "basiclang.run",
+        "title": "BasicLang: Run"
+      },
+      {
+        "command": "basiclang.buildAndRun",
+        "title": "BasicLang: Build and Run"
+      },
+      {
+        "command": "basiclang.formatDocument",
+        "title": "BasicLang: Format Document"
+      },
+      {
+        "command": "basiclang.selectBackend",
+        "title": "BasicLang: Select Backend"
       }
     ],
     "configuration": {
@@ -102,6 +128,57 @@
           ],
           "default": "off",
           "description": "Traces the communication between VS Code and the language server."
+        },
+        "basiclang.compiler.backend": {
+          "type": "string",
+          "enum": [
+            "csharp",
+            "javascript",
+            "python",
+            "llvm"
+          ],
+          "default": "csharp",
+          "description": "Code generation backend to use for compilation."
+        },
+        "basiclang.compiler.outputPath": {
+          "type": "string",
+          "default": "./out",
+          "description": "Output directory for compiled files."
+        },
+        "basiclang.compiler.optimizationLevel": {
+          "type": "string",
+          "enum": [
+            "none",
+            "basic",
+            "aggressive"
+          ],
+          "default": "basic",
+          "description": "Optimization level for code generation."
+        },
+        "basiclang.compiler.generateDebugInfo": {
+          "type": "boolean",
+          "default": true,
+          "description": "Generate debug information in compiled output."
+        },
+        "basiclang.compiler.strictMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable strict type checking and compilation."
+        },
+        "basiclang.compiler.warnings": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show compiler warnings."
+        },
+        "basiclang.format.indentSize": {
+          "type": "number",
+          "default": 4,
+          "description": "Number of spaces for indentation."
+        },
+        "basiclang.format.insertSpaces": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use spaces instead of tabs."
         }
       }
     },
@@ -128,6 +205,22 @@
                 "type": "boolean",
                 "description": "Stop on the first line",
                 "default": true
+              },
+              "backend": {
+                "type": "string",
+                "enum": ["csharp", "javascript", "python", "llvm"],
+                "description": "Backend to use for compilation",
+                "default": "csharp"
+              },
+              "args": {
+                "type": "array",
+                "description": "Command line arguments",
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory",
+                "default": "${workspaceFolder}"
               }
             }
           }
@@ -138,7 +231,8 @@
             "request": "launch",
             "name": "Debug BasicLang",
             "program": "${file}",
-            "stopOnEntry": true
+            "stopOnEntry": true,
+            "backend": "csharp"
           }
         ],
         "configurationSnippets": [
@@ -150,7 +244,20 @@
               "request": "launch",
               "name": "Debug BasicLang",
               "program": "^\"${1:${file}}\"",
-              "stopOnEntry": true
+              "stopOnEntry": true,
+              "backend": "csharp"
+            }
+          },
+          {
+            "label": "BasicLang: Launch with Backend",
+            "description": "Launch and debug a BasicLang program with specific backend",
+            "body": {
+              "type": "basiclang",
+              "request": "launch",
+              "name": "Debug BasicLang (${2:backend})",
+              "program": "^\"${1:${file}}\"",
+              "stopOnEntry": false,
+              "backend": "^\"${2|csharp,javascript,python,llvm|}\""
             }
           }
         ]

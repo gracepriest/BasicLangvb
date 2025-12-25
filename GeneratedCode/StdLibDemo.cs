@@ -13,7 +13,7 @@ namespace GeneratedCode
             double result = 0.0;
 
             x = 16;
-            result = Math.Sqrt(x);
+            result = Math.Sqrt(16);
             Console.WriteLine(result);
             result = Math.Abs(-5.5);
             Console.WriteLine(result);

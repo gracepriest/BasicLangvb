@@ -16,7 +16,7 @@ namespace GeneratedCode
             bool boolVal = false;
 
             strNum = "42";
-            intVal = Convert.ToInt32(strNum);
+            intVal = Convert.ToInt32("42");
             dblVal = Convert.ToDouble("3.14159");
             strResult = Convert.ToString(intVal);
             boolVal = Convert.ToBoolean(1);

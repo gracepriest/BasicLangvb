@@ -48,6 +48,12 @@ namespace BasicLang.Compiler.LSP
                     .WithHandler<CallHierarchyIncomingHandler>()
                     .WithHandler<CallHierarchyOutgoingHandler>()
                     .WithHandler<WorkspaceSymbolHandler>()
+                    // .WithHandler<CodeLensHandler>()
+                    // .WithHandler<SelectionRangeHandler>()
+                    // .WithHandler<LinkedEditingRangeHandler>()
+                    // .WithHandler<TypeHierarchyPrepareHandler>()
+                    // .WithHandler<TypeHierarchySupertypesHandler>()
+                    // .WithHandler<TypeHierarchySubtypesHandler>()
                     .OnInitialize(OnInitializeAsync)
                     .OnInitialized(OnInitializedAsync);
             }).ConfigureAwait(false);

@@ -29,7 +29,7 @@
 
     ldc.r8 16
     stloc.0
-    ldloc.0
+    ldc.r8 16
     call float64 [mscorlib]System.Math::Sqrt(float64)
     stloc.1
     ldloc.1

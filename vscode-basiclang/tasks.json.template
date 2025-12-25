@@ -1,0 +1,90 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build BasicLang",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--",
+        "--compile",
+        "${file}",
+        "--backend",
+        "${config:basiclang.compiler.backend}",
+        "--output",
+        "${config:basiclang.compiler.outputPath}"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run BasicLang",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--",
+        "--run",
+        "${file}",
+        "--backend",
+        "${config:basiclang.compiler.backend}"
+      ],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build and Run BasicLang",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--",
+        "--run",
+        "${file}",
+        "--backend",
+        "${config:basiclang.compiler.backend}"
+      ],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "dependsOn": "Build BasicLang",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean Output",
+      "type": "shell",
+      "command": "rm",
+      "windows": {
+        "command": "Remove-Item"
+      },
+      "args": [
+        "-Recurse",
+        "-Force",
+        "${config:basiclang.compiler.outputPath}"
+      ],
+      "group": "none",
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

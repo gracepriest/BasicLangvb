@@ -21,9 +21,10 @@ namespace GeneratedCode
                     result = i;
                     break;
                 }
-                i = i + 1;
+                t5 = 1;
+                i = 0 + 1;
             }
-            return result;
+            return -1;
         }
 
         public static void Main()

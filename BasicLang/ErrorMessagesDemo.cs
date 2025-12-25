@@ -9,7 +9,7 @@ namespace BasicLang.Demo
     /// </summary>
     public class ErrorMessagesDemo
     {
-        public static void Main(string[] args)
+        public static void Main_Disabled(string[] args)
         {
             Console.WriteLine("BasicLang Compiler - Error Message Improvements Demo");
             Console.WriteLine("====================================================\n");

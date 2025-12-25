@@ -69,6 +69,11 @@ namespace BasicLang.Compiler.CodeGen
         public string CSharpLanguageVersion { get; set; } = "8.0";
 
         /// <summary>
+        /// Whether to generate LINQ queries using query syntax instead of method syntax
+        /// </summary>
+        public bool UseLinqQuerySyntax { get; set; } = true;
+
+        /// <summary>
         /// Backend-specific options dictionary
         /// </summary>
         public Dictionary<string, object> BackendOptions { get; set; } = new Dictionary<string, object>();

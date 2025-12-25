@@ -15,6 +15,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private readonly List<SemanticError> _errors;
         private readonly Dictionary<ASTNode, TypeInfo> _nodeTypes;
         private readonly Dictionary<ASTNode, Symbol> _nodeSymbols;
+        private bool _inStaticContext;
 
         public List<SemanticError> Errors => _errors;
         public Scope GlobalScope { get; private set; }
@@ -25,6 +26,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _errors = new List<SemanticError>();
             _nodeTypes = new Dictionary<ASTNode, TypeInfo>();
             _nodeSymbols = new Dictionary<ASTNode, Symbol>();
+            _inStaticContext = false;
         }
 
         public bool Analyze(ProgramNode program)
@@ -676,11 +678,21 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
+            // Set static context if this is a static function
+            var wasInStaticContext = _inStaticContext;
+            if (node.IsStatic)
+            {
+                _inStaticContext = true;
+            }
+
             // Process body
             if (node.Body != null && !node.IsAbstract)
             {
                 node.Body.Accept(this);
             }
+
+            // Restore static context
+            _inStaticContext = wasInStaticContext;
 
             ExitScope();
         }
@@ -734,11 +746,21 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
+            // Set static context if this is a static subroutine
+            var wasInStaticContext = _inStaticContext;
+            if (node.IsStatic)
+            {
+                _inStaticContext = true;
+            }
+
             // Process body
             if (node.Body != null)
             {
                 node.Body.Accept(this);
             }
+
+            // Restore static context
+            _inStaticContext = wasInStaticContext;
 
             ExitScope();
         }
@@ -801,6 +823,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             else
             {
                 varType = ResolveTypeReference(node.Type);
+                if (varType == null)
+                {
+                    Error($"Unknown type '{node.Type?.Name ?? "null"}' for variable '{node.Name}'", node.Line, node.Column);
+                    varType = _typeManager.ObjectType;
+                }
             }
 
             var symbol = new Symbol(node.Name, SymbolKind.Variable, varType, node.Line, node.Column);
@@ -820,7 +847,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 node.Initializer.Accept(this);
                 var initType = GetNodeType(node.Initializer);
 
-                if (!varType.IsAssignableFrom(initType))
+                if (initType != null && !varType.IsAssignableFrom(initType))
                 {
                     Error($"Cannot assign value of type '{initType}' to variable of type '{varType}'",
                           node.Line, node.Column);
@@ -1024,15 +1051,42 @@ namespace BasicLang.Compiler.SemanticAnalysis
             TypeInfo propertyType = null;
             if (node.PropertyType != null)
             {
-                propertyType = _typeManager.GetType(node.PropertyType.Name);
+                propertyType = ResolveTypeReference(node.PropertyType);
                 if (propertyType == null)
                 {
                     Error($"Unknown property type '{node.PropertyType.Name}'", node.Line, node.Column);
+                    propertyType = _typeManager.ObjectType;
                 }
             }
+            else
+            {
+                // Default to Object type if not specified
+                propertyType = _typeManager.ObjectType;
+            }
 
-            // Default to Object type if not specified
-            propertyType = propertyType ?? new TypeInfo("Object", TypeKind.Class);
+            // Validate ReadOnly/WriteOnly combinations
+            if (node.IsReadOnly && node.IsWriteOnly)
+            {
+                Error($"Property '{node.Name}' cannot be both ReadOnly and WriteOnly", node.Line, node.Column);
+            }
+
+            // Validate that ReadOnly properties have only getter
+            if (node.IsReadOnly && node.Setter != null)
+            {
+                Error($"ReadOnly property '{node.Name}' cannot have a setter", node.Line, node.Column);
+            }
+
+            // Validate that WriteOnly properties have only setter
+            if (node.IsWriteOnly && node.Getter != null)
+            {
+                Error($"WriteOnly property '{node.Name}' cannot have a getter", node.Line, node.Column);
+            }
+
+            // Ensure property has at least one accessor
+            if (node.Getter == null && node.Setter == null)
+            {
+                Error($"Property '{node.Name}' must have at least one accessor (Get or Set)", node.Line, node.Column);
+            }
 
             // Create a symbol for the property
             var symbol = new Symbol(node.Name, SymbolKind.Property, propertyType, node.Line, node.Column);
@@ -1047,12 +1101,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
             SetNodeSymbol(node, symbol);
             SetNodeType(node, propertyType);
 
+            // Set static context if this is a static property
+            var wasInStaticContext = _inStaticContext;
+            if (node.IsStatic)
+            {
+                _inStaticContext = true;
+            }
+
             // Analyze getter
             if (node.Getter != null)
             {
                 var getterScope = EnterScope($"get_{node.Name}", ScopeKind.Function);
-                getterScope.ReturnType = propertyType ?? new TypeInfo("Object", TypeKind.Class);
+                getterScope.ReturnType = propertyType;
+
+                // Analyze getter body
                 node.Getter.Accept(this);
+
+                // Validate that getter returns the correct type
+                // Check if all return statements in getter return the property type
+                ValidateGetterReturns(node.Getter, propertyType, node.Name, node.Line, node.Column);
+
                 ExitScope();
             }
 
@@ -1066,17 +1134,58 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (node.SetterParameter != null)
                 {
                     node.SetterParameter.Accept(this);
+
+                    // Validate setter parameter type matches property type
+                    var paramType = GetNodeType(node.SetterParameter);
+                    if (paramType != null && !propertyType.IsAssignableFrom(paramType))
+                    {
+                        Error($"Setter parameter type '{paramType}' does not match property type '{propertyType}'",
+                              node.SetterParameter.Line, node.SetterParameter.Column);
+                    }
                 }
                 else
                 {
-                    // Create implicit 'value' parameter with the property's type (or Object if unknown)
-                    var valueType = propertyType ?? new TypeInfo("Object", TypeKind.Class);
-                    var valueSymbol = new Symbol("value", SymbolKind.Parameter, valueType, node.Line, node.Column);
+                    // Create implicit 'value' parameter with the property's type
+                    var valueSymbol = new Symbol("value", SymbolKind.Parameter, propertyType, node.Line, node.Column);
                     _currentScope.Define(valueSymbol);
                 }
 
                 node.Setter.Accept(this);
                 ExitScope();
+            }
+
+            // Restore static context
+            _inStaticContext = wasInStaticContext;
+        }
+
+        /// <summary>
+        /// Validate that all return statements in a getter return the correct type
+        /// </summary>
+        private void ValidateGetterReturns(BlockNode getterBlock, TypeInfo expectedType, string propertyName, int line, int column)
+        {
+            if (getterBlock == null) return;
+
+            foreach (var statement in getterBlock.Statements)
+            {
+                if (statement is ReturnStatementNode returnStmt && returnStmt.Value != null)
+                {
+                    var returnType = GetNodeType(returnStmt.Value);
+                    if (returnType != null && !expectedType.IsAssignableFrom(returnType))
+                    {
+                        Error($"Property '{propertyName}' getter must return type '{expectedType}', but returns '{returnType}'",
+                              returnStmt.Line, returnStmt.Column);
+                    }
+                }
+                else if (statement is BlockNode nestedBlock)
+                {
+                    ValidateGetterReturns(nestedBlock, expectedType, propertyName, line, column);
+                }
+                else if (statement is IfStatementNode ifStmt)
+                {
+                    ValidateGetterReturns(ifStmt.ThenBlock, expectedType, propertyName, line, column);
+                    if (ifStmt.ElseBlock != null)
+                        ValidateGetterReturns(ifStmt.ElseBlock, expectedType, propertyName, line, column);
+                }
             }
         }
 
@@ -1106,47 +1215,78 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(LambdaExpressionNode node)
         {
-            // Create a scope for the lambda parameters
-            EnterScope("Lambda", ScopeKind.Function);
+            // Track captured variables for closure generation
+            var capturedVariables = new List<Symbol>();
+            var lambdaScope = EnterScope("Lambda", ScopeKind.Function);
 
-            // Register parameters in the lambda scope
+            // Register parameters in the lambda scope and analyze their types
             foreach (var param in node.Parameters)
             {
-                var paramType = _typeManager.GetType(param.Type?.Name ?? "Object");
+                var paramType = param.Type != null
+                    ? ResolveTypeReference(param.Type)
+                    : _typeManager.GetType("Object");
                 var paramSymbol = new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column);
                 _currentScope.Define(paramSymbol);
+                SetNodeSymbol(param, paramSymbol);
+                SetNodeType(param, paramType);
             }
 
-            // Analyze the body
+            // Analyze the body to discover captured variables
+            TypeInfo bodyType = null;
             if (node.Body != null)
             {
                 node.Body.Accept(this);
-                // For function lambdas, the return type is the type of the expression
-                if (node.IsFunction)
-                {
-                    var bodyType = GetNodeType(node.Body) ?? _typeManager.GetType("Object");
-                    // Create a delegate type for the lambda
-                    var delegateType = new TypeInfo($"Func<{bodyType.Name}>", TypeKind.Delegate);
-                    SetNodeType(node, delegateType);
-                }
-                else
-                {
-                    // Sub lambdas return void
-                    var delegateType = new TypeInfo("Action", TypeKind.Delegate);
-                    SetNodeType(node, delegateType);
-                }
+                bodyType = GetNodeType(node.Body) ?? _typeManager.GetType("Object");
             }
             else if (node.StatementBody != null)
             {
-                node.StatementBody.Accept(this);
-                // Statement body lambdas with explicit return type or void
-                var returnType = node.ReturnType != null
-                    ? _typeManager.GetType(node.ReturnType.Name)
+                lambdaScope.ReturnType = node.ReturnType != null
+                    ? ResolveTypeReference(node.ReturnType)
                     : _typeManager.GetType("Void");
-                var delegateType = new TypeInfo($"Func<{returnType.Name}>", TypeKind.Delegate);
-                SetNodeType(node, delegateType);
+                node.StatementBody.Accept(this);
+                bodyType = lambdaScope.ReturnType;
             }
 
+            // Find captured variables (variables from outer scopes used in lambda)
+            // This happens automatically through scope resolution - variables resolved
+            // from parent scopes are captured variables
+
+            // Determine the delegate type
+            TypeInfo delegateType;
+            if (node.IsFunction)
+            {
+                // Function lambda - returns a value
+                var returnType = node.ReturnType != null
+                    ? ResolveTypeReference(node.ReturnType)
+                    : bodyType ?? _typeManager.GetType("Object");
+
+                if (node.Parameters.Count == 0)
+                {
+                    delegateType = new TypeInfo($"Func<{returnType.Name}>", TypeKind.Delegate);
+                }
+                else
+                {
+                    var paramTypes = string.Join(", ", node.Parameters.Select(p =>
+                        p.Type != null ? ResolveTypeReference(p.Type).Name : "object"));
+                    delegateType = new TypeInfo($"Func<{paramTypes}, {returnType.Name}>", TypeKind.Delegate);
+                }
+            }
+            else
+            {
+                // Sub lambda - returns void
+                if (node.Parameters.Count == 0)
+                {
+                    delegateType = new TypeInfo("Action", TypeKind.Delegate);
+                }
+                else
+                {
+                    var paramTypes = string.Join(", ", node.Parameters.Select(p =>
+                        p.Type != null ? ResolveTypeReference(p.Type).Name : "object"));
+                    delegateType = new TypeInfo($"Action<{paramTypes}>", TypeKind.Delegate);
+                }
+            }
+
+            SetNodeType(node, delegateType);
             ExitScope();
         }
 
@@ -1382,6 +1522,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(LinqQueryExpressionNode node)
         {
+            // Create a new scope for LINQ query to manage range variables
+            EnterScope("LinqQuery", ScopeKind.Block);
+
+            TypeInfo currentResultType = _typeManager.ObjectType;
+
             // Analyze each clause
             foreach (var clause in node.Clauses)
             {
@@ -1389,32 +1534,151 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     case FromClause from:
                         from.Collection?.Accept(this);
-                        // Define the range variable
-                        var symbol = new Symbol(from.VariableName, SymbolKind.Variable, _typeManager.ObjectType, from.Line, from.Column);
+                        var collectionType = GetNodeType(from.Collection);
+
+                        // Try to infer element type from collection
+                        TypeInfo elementType = _typeManager.ObjectType;
+                        if (collectionType?.Kind == TypeKind.Array)
+                        {
+                            elementType = collectionType.ElementType ?? _typeManager.ObjectType;
+                        }
+
+                        // Define the range variable with inferred type
+                        var symbol = new Symbol(from.VariableName, SymbolKind.Variable, elementType, from.Line, from.Column);
                         _currentScope.Define(symbol);
+                        currentResultType = elementType;
                         break;
+
                     case WhereClause where:
                         where.Condition?.Accept(this);
+                        var condType = GetNodeType(where.Condition);
+                        if (condType != null && !condType.Equals(_typeManager.BooleanType))
+                        {
+                            Warning($"Where condition should be Boolean, got '{condType}'", where.Line, where.Column);
+                        }
                         break;
+
                     case SelectClause select:
                         select.Selector?.Accept(this);
+                        currentResultType = GetNodeType(select.Selector) ?? _typeManager.ObjectType;
                         break;
+
                     case OrderByClause orderBy:
                         orderBy.KeySelector?.Accept(this);
                         break;
+
+                    case GroupByClause groupBy:
+                        groupBy.KeySelector?.Accept(this);
+                        if (groupBy.ElementSelector != null)
+                        {
+                            groupBy.ElementSelector.Accept(this);
+                        }
+
+                        // If there's an Into variable, define it in scope
+                        if (!string.IsNullOrEmpty(groupBy.IntoVariable))
+                        {
+                            // The into variable represents IGrouping<TKey, TElement>
+                            var groupingType = _typeManager.ObjectType;  // Simplified
+                            var intoSymbol = new Symbol(groupBy.IntoVariable, SymbolKind.Variable, groupingType, groupBy.Line, groupBy.Column);
+                            _currentScope.Define(intoSymbol);
+                        }
+                        break;
+
+                    case JoinClause join:
+                        join.Collection?.Accept(this);
+                        join.OuterKeySelector?.Accept(this);
+                        join.InnerKeySelector?.Accept(this);
+
+                        // Define the join range variable
+                        var joinCollectionType = GetNodeType(join.Collection);
+                        TypeInfo joinElementType = _typeManager.ObjectType;
+                        if (joinCollectionType?.Kind == TypeKind.Array)
+                        {
+                            joinElementType = joinCollectionType.ElementType ?? _typeManager.ObjectType;
+                        }
+
+                        var joinSymbol = new Symbol(join.VariableName, SymbolKind.Variable, joinElementType, join.Line, join.Column);
+                        _currentScope.Define(joinSymbol);
+
+                        // Validate key types match
+                        var outerKeyType = GetNodeType(join.OuterKeySelector);
+                        var innerKeyType = GetNodeType(join.InnerKeySelector);
+                        if (outerKeyType != null && innerKeyType != null && !_typeManager.AreCompatible(outerKeyType, innerKeyType))
+                        {
+                            Warning($"Join key types '{outerKeyType}' and '{innerKeyType}' are not compatible", join.Line, join.Column);
+                        }
+
+                        // If there's an Into variable, it's a group join
+                        if (!string.IsNullOrEmpty(join.IntoVariable))
+                        {
+                            var groupJoinType = _typeManager.ObjectType;  // Simplified: should be IEnumerable<joinElementType>
+                            var intoSymbol = new Symbol(join.IntoVariable, SymbolKind.Variable, groupJoinType, join.Line, join.Column);
+                            _currentScope.Define(intoSymbol);
+                        }
+                        break;
+
+                    case AggregateClause aggregate:
+                        aggregate.Collection?.Accept(this);
+                        if (aggregate.Selector != null)
+                        {
+                            aggregate.Selector.Accept(this);
+                        }
+
+                        var aggCollectionType = GetNodeType(aggregate.Collection);
+                        TypeInfo aggElementType = _typeManager.ObjectType;
+                        if (aggCollectionType?.Kind == TypeKind.Array)
+                        {
+                            aggElementType = aggCollectionType.ElementType ?? _typeManager.ObjectType;
+                        }
+
+                        var aggSymbol = new Symbol(aggregate.VariableName, SymbolKind.Variable, aggElementType, aggregate.Line, aggregate.Column);
+                        _currentScope.Define(aggSymbol);
+
+                        if (!string.IsNullOrEmpty(aggregate.IntoVariable))
+                        {
+                            var intoSymbol = new Symbol(aggregate.IntoVariable, SymbolKind.Variable, _typeManager.ObjectType, aggregate.Line, aggregate.Column);
+                            _currentScope.Define(intoSymbol);
+                        }
+                        break;
+
                     case LetClause let:
                         let.Value?.Accept(this);
-                        var letSymbol = new Symbol(let.VariableName, SymbolKind.Variable, _typeManager.ObjectType, let.Line, let.Column);
+                        var letType = GetNodeType(let.Value) ?? _typeManager.ObjectType;
+                        var letSymbol = new Symbol(let.VariableName, SymbolKind.Variable, letType, let.Line, let.Column);
                         _currentScope.Define(letSymbol);
                         break;
+
                     case TakeClause take:
                         take.Count?.Accept(this);
+                        var takeCountType = GetNodeType(take.Count);
+                        if (takeCountType != null && !takeCountType.IsIntegral())
+                        {
+                            Error($"Take count must be an integer type, got '{takeCountType}'", take.Line, take.Column);
+                        }
                         break;
+
                     case SkipClause skip:
                         skip.Count?.Accept(this);
+                        var skipCountType = GetNodeType(skip.Count);
+                        if (skipCountType != null && !skipCountType.IsIntegral())
+                        {
+                            Error($"Skip count must be an integer type, got '{skipCountType}'", skip.Line, skip.Column);
+                        }
+                        break;
+
+                    case DistinctClause distinct:
+                        // No additional validation needed
                         break;
                 }
             }
+
+            // Set the result type of the query expression (usually IEnumerable<T>)
+            // For simplification, we use an array type
+            var resultArrayType = new TypeInfo($"{currentResultType.Name}[]", TypeKind.Array);
+            resultArrayType.ElementType = currentResultType;
+            SetNodeType(node, resultArrayType);
+
+            ExitScope();
         }
 
         // ====================================================================
@@ -2043,6 +2307,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (classScope == null)
                 {
                     Error("'Me' can only be used within a class", node.Line, node.Column);
+                    SetNodeType(node, _typeManager.ObjectType);
+                }
+                else if (_inStaticContext)
+                {
+                    Error("'Me' cannot be used in a static (Shared) context", node.Line, node.Column);
                     SetNodeType(node, _typeManager.ObjectType);
                 }
                 else

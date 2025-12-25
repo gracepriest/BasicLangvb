@@ -21,7 +21,7 @@ namespace GeneratedCode
             string replaced = "";
 
             text = "  Hello World  ";
-            trimmed = text.Trim();
+            trimmed = "  Hello World  ".Trim();
             length = trimmed.Length;
             upper = trimmed.ToUpper();
             lower = trimmed.ToLower();

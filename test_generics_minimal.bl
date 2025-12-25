@@ -1,0 +1,18 @@
+' Minimal generics test - just declaration
+Class Box(Of T)
+    Public Value As T
+
+    Function GetValue() As T
+        Return Value
+    End Function
+End Class
+
+Function Swap(Of T)(ByRef a As T, ByRef b As T)
+    Dim temp As T = a
+    a = b
+    b = temp
+End Function
+
+Sub Main()
+    PrintLine("Generics test")
+End Sub

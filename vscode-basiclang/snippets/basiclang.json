@@ -1,0 +1,264 @@
+{
+  "Class Definition": {
+    "prefix": "class",
+    "body": [
+      "Class ${1:ClassName}",
+      "\t$0",
+      "End Class"
+    ],
+    "description": "Create a new class"
+  },
+  "Sub Procedure": {
+    "prefix": "sub",
+    "body": [
+      "Sub ${1:ProcedureName}(${2:parameters})",
+      "\t$0",
+      "End Sub"
+    ],
+    "description": "Create a new sub procedure"
+  },
+  "Function": {
+    "prefix": "function",
+    "body": [
+      "Function ${1:FunctionName}(${2:parameters}) As ${3:ReturnType}",
+      "\t$0",
+      "\tReturn ${4:value}",
+      "End Function"
+    ],
+    "description": "Create a new function"
+  },
+  "If Then Statement": {
+    "prefix": "if",
+    "body": [
+      "If ${1:condition} Then",
+      "\t$0",
+      "End If"
+    ],
+    "description": "Create an if...then...end if statement"
+  },
+  "If Then Else Statement": {
+    "prefix": "ife",
+    "body": [
+      "If ${1:condition} Then",
+      "\t${2}",
+      "Else",
+      "\t${3}",
+      "End If"
+    ],
+    "description": "Create an if...then...else...end if statement"
+  },
+  "If Then ElseIf Statement": {
+    "prefix": "ifel",
+    "body": [
+      "If ${1:condition} Then",
+      "\t${2}",
+      "ElseIf ${3:condition} Then",
+      "\t${4}",
+      "Else",
+      "\t${5}",
+      "End If"
+    ],
+    "description": "Create an if...then...elseif...else...end if statement"
+  },
+  "For Next Loop": {
+    "prefix": "for",
+    "body": [
+      "For ${1:i} = ${2:0} To ${3:10}",
+      "\t$0",
+      "Next ${1:i}"
+    ],
+    "description": "Create a for...next loop"
+  },
+  "For Each Loop": {
+    "prefix": "foreach",
+    "body": [
+      "For Each ${1:item} In ${2:collection}",
+      "\t$0",
+      "Next ${1:item}"
+    ],
+    "description": "Create a for each...next loop"
+  },
+  "While Wend Loop": {
+    "prefix": "while",
+    "body": [
+      "While ${1:condition}",
+      "\t$0",
+      "Wend"
+    ],
+    "description": "Create a while...wend loop"
+  },
+  "Do While Loop": {
+    "prefix": "dowhile",
+    "body": [
+      "Do While ${1:condition}",
+      "\t$0",
+      "Loop"
+    ],
+    "description": "Create a do while...loop"
+  },
+  "Do Until Loop": {
+    "prefix": "dountil",
+    "body": [
+      "Do Until ${1:condition}",
+      "\t$0",
+      "Loop"
+    ],
+    "description": "Create a do until...loop"
+  },
+  "Select Case Statement": {
+    "prefix": "select",
+    "body": [
+      "Select Case ${1:expression}",
+      "\tCase ${2:value1}",
+      "\t\t${3}",
+      "\tCase ${4:value2}",
+      "\t\t${5}",
+      "\tCase Else",
+      "\t\t${6}",
+      "End Select"
+    ],
+    "description": "Create a select case...end select statement"
+  },
+  "Try Catch Statement": {
+    "prefix": "try",
+    "body": [
+      "Try",
+      "\t${1}",
+      "Catch ${2:ex} As ${3:Exception}",
+      "\t${4}",
+      "End Try"
+    ],
+    "description": "Create a try...catch...end try statement"
+  },
+  "Try Catch Finally Statement": {
+    "prefix": "tryf",
+    "body": [
+      "Try",
+      "\t${1}",
+      "Catch ${2:ex} As ${3:Exception}",
+      "\t${4}",
+      "Finally",
+      "\t${5}",
+      "End Try"
+    ],
+    "description": "Create a try...catch...finally...end try statement"
+  },
+  "Property": {
+    "prefix": "prop",
+    "body": [
+      "Property ${1:PropertyName} As ${2:Type}",
+      "\tGet",
+      "\t\tReturn ${3:_value}",
+      "\tEnd Get",
+      "\tSet(value As ${2:Type})",
+      "\t\t${3:_value} = value",
+      "\tEnd Set",
+      "End Property"
+    ],
+    "description": "Create a property with getter and setter"
+  },
+  "Auto Property": {
+    "prefix": "propa",
+    "body": [
+      "Property ${1:PropertyName} As ${2:Type}"
+    ],
+    "description": "Create an auto-implemented property"
+  },
+  "Read-Only Property": {
+    "prefix": "propr",
+    "body": [
+      "Property ${1:PropertyName} As ${2:Type}",
+      "\tGet",
+      "\t\tReturn ${3:_value}",
+      "\tEnd Get",
+      "End Property"
+    ],
+    "description": "Create a read-only property"
+  },
+  "Module": {
+    "prefix": "module",
+    "body": [
+      "Module ${1:ModuleName}",
+      "\t$0",
+      "End Module"
+    ],
+    "description": "Create a new module"
+  },
+  "Interface": {
+    "prefix": "interface",
+    "body": [
+      "Interface ${1:InterfaceName}",
+      "\t$0",
+      "End Interface"
+    ],
+    "description": "Create a new interface"
+  },
+  "Structure": {
+    "prefix": "struct",
+    "body": [
+      "Structure ${1:StructureName}",
+      "\t$0",
+      "End Structure"
+    ],
+    "description": "Create a new structure"
+  },
+  "Enum": {
+    "prefix": "enum",
+    "body": [
+      "Enum ${1:EnumName}",
+      "\t${2:Value1}",
+      "\t${3:Value2}",
+      "\t${4:Value3}",
+      "End Enum"
+    ],
+    "description": "Create a new enumeration"
+  },
+  "Namespace": {
+    "prefix": "namespace",
+    "body": [
+      "Namespace ${1:NamespaceName}",
+      "\t$0",
+      "End Namespace"
+    ],
+    "description": "Create a new namespace"
+  },
+  "Imports": {
+    "prefix": "imports",
+    "body": [
+      "Imports ${1:Namespace}"
+    ],
+    "description": "Add an imports statement"
+  },
+  "Dim Variable": {
+    "prefix": "dim",
+    "body": [
+      "Dim ${1:variableName} As ${2:Type} = ${3:value}"
+    ],
+    "description": "Declare a variable with Dim"
+  },
+  "Const": {
+    "prefix": "const",
+    "body": [
+      "Const ${1:ConstantName} As ${2:Type} = ${3:value}"
+    ],
+    "description": "Declare a constant"
+  },
+  "With Statement": {
+    "prefix": "with",
+    "body": [
+      "With ${1:object}",
+      "\t$0",
+      "End With"
+    ],
+    "description": "Create a with...end with statement"
+  },
+  "Main Sub": {
+    "prefix": "main",
+    "body": [
+      "Sub Main()",
+      "\t$0",
+      "End Sub"
+    ],
+    "description": "Create a Main entry point"
+  }
+}

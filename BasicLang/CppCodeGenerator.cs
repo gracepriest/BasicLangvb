@@ -97,6 +97,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     GenerateClass(irClass);
                     WriteLine();
                 }
+
+                // Generate static member initializations outside class
+                WriteLine("// Static member initializations");
+                foreach (var irClass in module.Classes.Values)
+                {
+                    GenerateStaticMemberInitializations(irClass);
+                }
+                if (module.Classes.Values.Any(c => c.Fields.Any(f => f.IsStatic)))
+                    WriteLine();
             }
 
             // Generate global variables
@@ -282,6 +291,23 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("};");
         }
 
+        private void GenerateStaticMemberInitializations(IRClass irClass)
+        {
+            var className = SanitizeName(irClass.Name);
+            var staticFields = irClass.Fields.Where(f => f.IsStatic).ToList();
+
+            foreach (var field in staticFields)
+            {
+                var type = MapType(field.Type);
+                var name = SanitizeName(field.Name);
+                var defaultValue = field.Initializer != null
+                    ? (field.Initializer is IRConstant c ? EmitConstant(c) : GetValueName(field.Initializer))
+                    : GetDefaultValue(field.Type);
+
+                WriteLine($"{type} {className}::{name} = {defaultValue};");
+            }
+        }
+
         private void GenerateClass(IRClass irClass)
         {
             var className = SanitizeName(irClass.Name);
@@ -359,10 +385,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 GenerateConstructor(irClass, ctor);
             }
 
-            // Default destructor
-            if (!string.IsNullOrEmpty(irClass.BaseClass) || irClass.Interfaces.Count > 0)
+            // Destructor - virtual if has base class, interfaces, or virtual methods
+            bool needsVirtualDestructor = !string.IsNullOrEmpty(irClass.BaseClass) ||
+                                         irClass.Interfaces.Count > 0 ||
+                                         irClass.Methods.Any(m => m.IsVirtual || m.IsOverride);
+
+            if (needsVirtualDestructor)
             {
-                WriteLine($"virtual ~{className}() = default;");
+                WriteLine($"virtual ~{className}() {{}}");
+                WriteLine();
+            }
+            else
+            {
+                WriteLine($"~{className}() = default;");
                 WriteLine();
             }
 
@@ -371,6 +406,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 GenerateProperty(irClass, prop);
             }
+
+            // Generate simple inline getters/setters for private fields with public access pattern
+            GenerateSimplePropertyAccessors(irClass);
 
             // Events
             foreach (var evt in irClass.Events)
@@ -392,22 +430,56 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var className = SanitizeName(irClass.Name);
 
-            // Generate parameter list from implementation
+            // Generate parameter list from implementation with const references for complex types
             var paramList = "";
             if (ctor.Implementation != null)
             {
                 paramList = string.Join(", ", ctor.Implementation.Parameters.Select(p =>
-                    $"{MapType(p.Type)} {SanitizeName(p.Name)}"));
+                {
+                    var paramType = MapType(p.Type);
+                    // Use const reference for string and complex types
+                    if (paramType == "std::string" || (p.Type != null && p.Type.Kind == TypeKind.Class))
+                        return $"const {paramType}& {SanitizeName(p.Name)}";
+                    return $"{paramType} {SanitizeName(p.Name)}";
+                }));
             }
 
-            // Base constructor call (initializer list)
-            var initList = "";
+            // Build comprehensive initializer list
+            var initItems = new List<string>();
+
+            // Base constructor call first
             if (!string.IsNullOrEmpty(irClass.BaseClass) && ctor.BaseConstructorArgs.Count > 0)
             {
                 var baseArgs = string.Join(", ", ctor.BaseConstructorArgs.Select(a =>
                     a is IRConstant c ? EmitConstant(c) : SanitizeName(a.Name)));
-                initList = $" : {SanitizeName(irClass.BaseClass)}({baseArgs})";
+                initItems.Add($"{SanitizeName(irClass.BaseClass)}({baseArgs})");
             }
+            else if (!string.IsNullOrEmpty(irClass.BaseClass))
+            {
+                // Default base constructor call
+                initItems.Add($"{SanitizeName(irClass.BaseClass)}()");
+            }
+
+            // Field initializations - match constructor parameters to fields
+            if (ctor.Implementation != null)
+            {
+                foreach (var param in ctor.Implementation.Parameters)
+                {
+                    // Find matching field (by name or by backing field pattern)
+                    var field = irClass.Fields.FirstOrDefault(f =>
+                        f.Name.Equals(param.Name, StringComparison.OrdinalIgnoreCase) ||
+                        f.Name.Equals("_" + param.Name, StringComparison.OrdinalIgnoreCase));
+
+                    if (field != null)
+                    {
+                        var fieldName = SanitizeName(field.Name);
+                        var paramName = SanitizeName(param.Name);
+                        initItems.Add($"{fieldName}({paramName})");
+                    }
+                }
+            }
+
+            var initList = initItems.Count > 0 ? " : " + string.Join(", ", initItems) : "";
 
             WriteLine($"{className}({paramList}){initList}");
             WriteLine("{");
@@ -431,16 +503,73 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine();
         }
 
+        private void GenerateSimplePropertyAccessors(IRClass irClass)
+        {
+            // Find private fields that could have simple getters/setters
+            // Pattern: private field _name could have getName/setName methods
+            var privateFields = irClass.Fields.Where(f =>
+                f.Access == AccessModifier.Private &&
+                !f.IsStatic &&
+                f.Name.StartsWith("_")).ToList();
+
+            // Only generate if they don't already have complex property implementations
+            foreach (var field in privateFields)
+            {
+                var fieldName = SanitizeName(field.Name);
+                var propName = fieldName.TrimStart('_');
+
+                // Capitalize first letter for property name
+                if (propName.Length > 0)
+                    propName = char.ToUpper(propName[0]) + propName.Substring(1);
+
+                // Check if there's already a property with this name
+                var hasProperty = irClass.Properties.Any(p =>
+                    p.Name.Equals(propName, StringComparison.OrdinalIgnoreCase));
+
+                if (hasProperty)
+                    continue; // Skip if already has explicit property
+
+                var type = MapType(field.Type);
+                var returnType = type;
+                var paramType = type;
+
+                // Use const reference for complex types
+                if (type == "std::string" || (field.Type != null && field.Type.Kind == TypeKind.Class))
+                {
+                    returnType = $"const {type}&";
+                    paramType = $"const {type}&";
+                }
+
+                // Generate simple inline getter
+                WriteLine($"// Auto-generated getter for {fieldName}");
+                WriteLine($"{returnType} get{propName}() const {{ return {fieldName}; }}");
+                WriteLine();
+
+                // Generate simple inline setter
+                WriteLine($"// Auto-generated setter for {fieldName}");
+                WriteLine($"void set{propName}({paramType} value) {{ {fieldName} = value; }}");
+                WriteLine();
+            }
+        }
+
         private void GenerateProperty(IRClass irClass, IRProperty prop)
         {
             var propType = MapType(prop.Type);
             var propName = SanitizeName(prop.Name);
             var staticMod = prop.IsStatic ? "static " : "";
 
-            // Getter
+            // Determine if getter should be const (non-static, read-only access)
+            var constQualifier = (!prop.IsStatic) ? " const" : "";
+
+            // Use const reference for return type if it's a string or class type
+            var returnType = propType;
+            if (propType == "std::string" || (prop.Type != null && prop.Type.Kind == TypeKind.Class))
+                returnType = $"const {propType}&";
+
+            // Getter - returns const reference for complex types, const method for non-static
             if (prop.Getter != null && !prop.IsWriteOnly)
             {
-                WriteLine($"{staticMod}{propType} get_{propName}()");
+                WriteLine($"{staticMod}{returnType} get_{propName}(){constQualifier}");
                 WriteLine("{");
                 Indent();
 
@@ -457,10 +586,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine();
             }
 
-            // Setter
+            // Setter - takes const reference for complex types
             if (prop.Setter != null && !prop.IsReadOnly)
             {
-                WriteLine($"{staticMod}void set_{propName}({propType} value)");
+                var paramType = propType;
+                if (propType == "std::string" || (prop.Type != null && prop.Type.Kind == TypeKind.Class))
+                    paramType = $"const {propType}&";
+
+                WriteLine($"{staticMod}void set_{propName}({paramType} value)");
                 WriteLine("{");
                 Indent();
 
@@ -1122,8 +1255,34 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var methodName = SanitizeName(baseCall.MethodName);
             var args = string.Join(", ", baseCall.Arguments.Select(a => GetValueName(a)));
-            // C++ uses explicit base class name
-            WriteLine($"// base.{methodName}({args}) - C++ needs explicit base class name");
+
+            // Find the current class from the module to get base class name
+            string baseClassName = "Base";
+            if (_module != null && _currentFunction != null)
+            {
+                foreach (var irClass in _module.Classes.Values)
+                {
+                    if (irClass.Methods.Any(m => m.Implementation == _currentFunction) ||
+                        irClass.Constructors.Any(c => c.Implementation == _currentFunction) ||
+                        irClass.Properties.Any(p => p.Getter == _currentFunction || p.Setter == _currentFunction))
+                    {
+                        if (!string.IsNullOrEmpty(irClass.BaseClass))
+                            baseClassName = SanitizeName(irClass.BaseClass);
+                        break;
+                    }
+                }
+            }
+
+            // Generate base class method call
+            if (baseCall.Type == null || baseCall.Type.Name == "Void")
+            {
+                WriteLine($"{baseClassName}::{methodName}({args});");
+            }
+            else
+            {
+                var result = GetValueName(baseCall);
+                WriteLine($"{result} = {baseClassName}::{methodName}({args});");
+            }
         }
 
         public override void Visit(IRFieldAccess fieldAccess)
@@ -1209,7 +1368,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             };
         }
 
-        private string EmitConstant(IRConstant constant)
+        protected override string EmitConstant(IRConstant constant)
         {
             if (constant.Value == null)
                 return "nullptr";
@@ -1232,7 +1391,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             return constant.Value.ToString();
         }
 
-        private string EscapeString(string str)
+        protected new string EscapeString(string str)
         {
             return str.Replace("\\", "\\\\")
                      .Replace("\"", "\\\"")
@@ -1241,7 +1400,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                      .Replace("\t", "\\t");
         }
 
-        private string EscapeChar(char ch)
+        protected new string EscapeChar(char ch)
         {
             if (ch == '\'') return "\\'";
             if (ch == '\\') return "\\\\";

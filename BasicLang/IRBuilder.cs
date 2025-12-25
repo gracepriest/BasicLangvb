@@ -454,6 +454,11 @@ namespace BasicLang.Compiler.IR
                         IsSealed = funcNode.IsSealed,
                         Implementation = _module.Functions.LastOrDefault()
                     };
+                    // Copy generic parameters
+                    foreach (var genericParam in funcNode.GenericParameters)
+                    {
+                        method.GenericParameters.Add(genericParam);
+                    }
                     irClass.Methods.Add(method);
                 }
                 else if (member is SubroutineNode subNode)
@@ -473,6 +478,11 @@ namespace BasicLang.Compiler.IR
                         IsSealed = subNode.IsSealed,
                         Implementation = _module.Functions.LastOrDefault()
                     };
+                    // Copy generic parameters
+                    foreach (var genericParam in subNode.GenericParameters)
+                    {
+                        method.GenericParameters.Add(genericParam);
+                    }
                     irClass.Methods.Add(method);
                 }
                 else if (member is ConstructorNode ctorNode)
@@ -885,19 +895,34 @@ namespace BasicLang.Compiler.IR
             // Generate a unique name for the lambda function
             var lambdaName = $"__lambda_{_module.Functions.Count}";
 
-            // Determine return type
+            // Determine return type from semantic analysis
+            var lambdaType = _semanticAnalyzer.GetNodeType(node);
             var returnType = node.IsFunction
                 ? (_semanticAnalyzer.GetNodeType(node.Body) ?? new TypeInfo("Object", TypeKind.Class))
                 : new TypeInfo("Void", TypeKind.Primitive);
 
+            // If explicit return type specified, use it
+            if (node.ReturnType != null)
+            {
+                returnType = new TypeInfo(node.ReturnType.Name, TypeKind.Class);
+            }
+
             // Create the lambda function
             var lambdaFunc = new IRFunction(lambdaName, returnType);
+            // lambdaFunc.IsLambda = true; // Property not yet implemented
+
+            // Detect captured variables (variables from outer scopes)
+            var capturedVars = new List<(string name, TypeInfo type)>();
 
             // Add parameters
             foreach (var param in node.Parameters)
             {
-                var paramType = new TypeInfo(param.Type?.Name ?? "Object", TypeKind.Class);
-                var paramVar = new IRVariable(param.Name, paramType);
+                var paramSymbol = _semanticAnalyzer.GetNodeSymbol(param);
+                var paramType = paramSymbol?.Type ?? new TypeInfo("Object", TypeKind.Class);
+                var paramVar = new IRVariable(param.Name, paramType)
+                {
+                    IsParameter = true
+                };
                 lambdaFunc.Parameters.Add(paramVar);
             }
 
@@ -914,7 +939,8 @@ namespace BasicLang.Compiler.IR
             // Allocate parameters as locals
             foreach (var param in node.Parameters)
             {
-                var paramType = new TypeInfo(param.Type?.Name ?? "Object", TypeKind.Class);
+                var paramSymbol = _semanticAnalyzer.GetNodeSymbol(param);
+                var paramType = paramSymbol?.Type ?? new TypeInfo("Object", TypeKind.Class);
                 var alloca = new IRAlloca(param.Name, paramType);
                 _locals[param.Name] = alloca;
                 EmitInstruction(alloca);
@@ -937,6 +963,21 @@ namespace BasicLang.Compiler.IR
                 }
             }
 
+            // Detect captured variables by checking which outer scope variables were accessed
+            // This is a simplified approach - in a full implementation, we'd track this during body generation
+            foreach (var kvp in savedLocals)
+            {
+                if (!_locals.ContainsKey(kvp.Key))
+                {
+                    // This variable from outer scope was potentially captured
+                    // We'll let the C# backend handle this via closure conversion
+                    capturedVars.Add((kvp.Key, kvp.Value.Type));
+                }
+            }
+
+            // Store captured variables in the function metadata
+            // lambdaFunc.CapturedVariables = capturedVars; // Property not yet implemented
+
             // Add lambda function to module
             _module.Functions.Add(lambdaFunc);
 
@@ -949,8 +990,8 @@ namespace BasicLang.Compiler.IR
                 _locals[kvp.Key] = kvp.Value;
             }
 
-            // The result is a reference to the lambda function
-            _expressionResult = new IRVariable(lambdaName, new TypeInfo("Delegate", TypeKind.Delegate));
+            // The result is a reference to the lambda function (delegate)
+            _expressionResult = new IRVariable(lambdaName, lambdaType ?? new TypeInfo("Delegate", TypeKind.Delegate));
         }
 
         public void Visit(CollectionInitializerNode node)
@@ -1324,6 +1365,7 @@ namespace BasicLang.Compiler.IR
                         from.Collection?.Accept(this);
                         result = _expressionResult;
                         break;
+
                     case WhereClause where:
                         where.Condition?.Accept(this);
                         var whereCondition = _expressionResult;
@@ -1336,6 +1378,7 @@ namespace BasicLang.Compiler.IR
                         EmitInstruction(whereCall);
                         result = whereCall;
                         break;
+
                     case SelectClause select:
                         select.Selector?.Accept(this);
                         var selectExpr = _expressionResult;
@@ -1348,6 +1391,7 @@ namespace BasicLang.Compiler.IR
                         EmitInstruction(selectCall);
                         result = selectCall;
                         break;
+
                     case OrderByClause orderBy:
                         orderBy.KeySelector?.Accept(this);
                         var orderKey = _expressionResult;
@@ -1361,6 +1405,91 @@ namespace BasicLang.Compiler.IR
                         EmitInstruction(orderCall);
                         result = orderCall;
                         break;
+
+                    case GroupByClause groupBy:
+                        groupBy.KeySelector?.Accept(this);
+                        var groupKey = _expressionResult;
+
+                        var groupCall = new IRCall(
+                            _currentFunction.GetNextTempName(),
+                            "GroupBy",
+                            new TypeInfo("IEnumerable", TypeKind.Interface));
+                        if (result != null) groupCall.Arguments.Add(result);
+                        groupCall.Arguments.Add(groupKey);
+
+                        // If there's an element selector
+                        if (groupBy.ElementSelector != null)
+                        {
+                            groupBy.ElementSelector.Accept(this);
+                            groupCall.Arguments.Add(_expressionResult);
+                        }
+
+                        EmitInstruction(groupCall);
+                        result = groupCall;
+                        break;
+
+                    case JoinClause join:
+                        join.Collection?.Accept(this);
+                        var innerCollection = _expressionResult;
+
+                        join.OuterKeySelector?.Accept(this);
+                        var outerKey = _expressionResult;
+
+                        join.InnerKeySelector?.Accept(this);
+                        var innerKey = _expressionResult;
+
+                        var joinMethod = !string.IsNullOrEmpty(join.IntoVariable) ? "GroupJoin" : "Join";
+                        var joinCall = new IRCall(
+                            _currentFunction.GetNextTempName(),
+                            joinMethod,
+                            new TypeInfo("IEnumerable", TypeKind.Interface));
+                        if (result != null) joinCall.Arguments.Add(result);
+                        joinCall.Arguments.Add(innerCollection);
+                        joinCall.Arguments.Add(outerKey);
+                        joinCall.Arguments.Add(innerKey);
+
+                        EmitInstruction(joinCall);
+                        result = joinCall;
+                        break;
+
+                    case AggregateClause aggregate:
+                        aggregate.Collection?.Accept(this);
+                        var aggCollection = _expressionResult;
+
+                        var aggCall = new IRCall(
+                            _currentFunction.GetNextTempName(),
+                            "Aggregate",
+                            new TypeInfo("Object", TypeKind.Class));
+                        if (result != null) aggCall.Arguments.Add(result);
+                        aggCall.Arguments.Add(aggCollection);
+
+                        if (aggregate.Selector != null)
+                        {
+                            aggregate.Selector.Accept(this);
+                            aggCall.Arguments.Add(_expressionResult);
+                        }
+
+                        EmitInstruction(aggCall);
+                        result = aggCall;
+                        break;
+
+                    case LetClause let:
+                        // Let clauses create projection with additional property
+                        // We'll represent this as a Select that creates an anonymous type
+                        let.Value?.Accept(this);
+                        var letValue = _expressionResult;
+
+                        var letCall = new IRCall(
+                            _currentFunction.GetNextTempName(),
+                            "Select",
+                            new TypeInfo("IEnumerable", TypeKind.Interface));
+                        if (result != null) letCall.Arguments.Add(result);
+                        letCall.Arguments.Add(letValue);
+
+                        EmitInstruction(letCall);
+                        result = letCall;
+                        break;
+
                     case TakeClause take:
                         take.Count?.Accept(this);
                         var takeCount = _expressionResult;
@@ -1373,6 +1502,7 @@ namespace BasicLang.Compiler.IR
                         EmitInstruction(takeCall);
                         result = takeCall;
                         break;
+
                     case SkipClause skip:
                         skip.Count?.Accept(this);
                         var skipCount = _expressionResult;
@@ -1385,6 +1515,7 @@ namespace BasicLang.Compiler.IR
                         EmitInstruction(skipCall);
                         result = skipCall;
                         break;
+
                     case DistinctClause:
                         var distinctCall = new IRCall(
                             _currentFunction.GetNextTempName(),

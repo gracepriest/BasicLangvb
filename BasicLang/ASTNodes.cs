@@ -654,6 +654,25 @@ namespace BasicLang.Compiler.AST
     {
         public ExpressionNode KeySelector { get; set; }
         public ExpressionNode ElementSelector { get; set; }
+        public string IntoVariable { get; set; }  // For "Into g = Group"
+        public bool IsGroupKeyword { get; set; }   // true if "Into g = Group"
+    }
+
+    public class JoinClause : LinqClause
+    {
+        public string VariableName { get; set; }
+        public ExpressionNode Collection { get; set; }
+        public ExpressionNode OuterKeySelector { get; set; }
+        public ExpressionNode InnerKeySelector { get; set; }
+        public string IntoVariable { get; set; }  // For group join: "Into g = Group"
+    }
+
+    public class AggregateClause : LinqClause
+    {
+        public string VariableName { get; set; }
+        public ExpressionNode Collection { get; set; }
+        public ExpressionNode Selector { get; set; }
+        public string IntoVariable { get; set; }
     }
 
     public class LetClause : LinqClause

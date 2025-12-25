@@ -21,6 +21,8 @@ namespace BasicLang.Compiler.CodeGen.LLVM
         private readonly Dictionary<string, List<string>> _classFieldNames;  // class -> field names in order
         private readonly Dictionary<string, Dictionary<string, int>> _classFieldIndices;  // class -> field -> index
         private readonly Dictionary<string, string> _classStructTypes;  // class -> LLVM struct type
+        private readonly Dictionary<string, List<IRMethod>> _classVirtualMethods;  // class -> virtual methods
+        private readonly Dictionary<string, string> _classVtableTypes;  // class -> vtable struct type
         private IRModule _module;
         private new int _tempCounter;
         private int _labelCounter;
@@ -39,6 +41,8 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             _classFieldNames = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             _classFieldIndices = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
             _classStructTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _classVirtualMethods = new Dictionary<string, List<IRMethod>>(StringComparer.OrdinalIgnoreCase);
+            _classVtableTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             _typeMapper = new LLVMTypeMapper();
         }
 
@@ -68,6 +72,8 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             _classFieldNames.Clear();
             _classFieldIndices.Clear();
             _classStructTypes.Clear();
+            _classVirtualMethods.Clear();
+            _classVtableTypes.Clear();
             _tempCounter = 0;
             _labelCounter = 0;
             _stringCounter = 0;
@@ -96,6 +102,30 @@ namespace BasicLang.Compiler.CodeGen.LLVM
                 foreach (var irClass in module.Classes.Values)
                 {
                     GenerateClassStructType(irClass);
+                }
+                WriteLine();
+            }
+
+            // Generate vtable types and data
+            if (module.Classes.Count > 0)
+            {
+                WriteLine("; Vtable types");
+                foreach (var irClass in module.Classes.Values)
+                {
+                    if (_classVtableTypes.ContainsKey(irClass.Name))
+                    {
+                        GenerateVtableType(irClass);
+                    }
+                }
+                WriteLine();
+
+                WriteLine("; Vtable data");
+                foreach (var irClass in module.Classes.Values)
+                {
+                    if (_classVtableTypes.ContainsKey(irClass.Name))
+                    {
+                        GenerateVtableData(irClass);
+                    }
                 }
                 WriteLine();
             }
@@ -183,12 +213,38 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             var fieldNames = new List<string>();
             var fieldIndices = new Dictionary<string, int>();
 
-            // Inherit fields from base class if any
             int fieldIndex = 0;
+
+            // Collect virtual methods
+            var virtualMethods = new List<IRMethod>();
+            foreach (var method in irClass.Methods)
+            {
+                if (method.IsVirtual || method.IsOverride)
+                {
+                    virtualMethods.Add(method);
+                }
+            }
+            _classVirtualMethods[irClass.Name] = virtualMethods;
+
+            // First field: vtable pointer (if class has virtual methods or inherits from class with virtuals)
+            bool hasVtable = virtualMethods.Count > 0 ||
+                            (!string.IsNullOrEmpty(irClass.BaseClass) && _classVirtualMethods.ContainsKey(irClass.BaseClass) && _classVirtualMethods[irClass.BaseClass].Count > 0);
+
+            if (hasVtable)
+            {
+                var vtableTypeName = $"%vtable.{className}";
+                _classVtableTypes[irClass.Name] = vtableTypeName;
+                fieldTypes.Add($"{vtableTypeName}*");
+                fieldNames.Add("__vtable_ptr");
+                fieldIndices["__vtable_ptr"] = fieldIndex++;
+            }
+
+            // Inherit fields from base class if any
             if (!string.IsNullOrEmpty(irClass.BaseClass) && _classFieldNames.ContainsKey(irClass.BaseClass))
             {
                 foreach (var baseField in _classFieldNames[irClass.BaseClass])
                 {
+                    if (baseField == "__vtable_ptr") continue; // Skip vtable ptr - already added
                     var baseFieldType = GetFieldType(irClass.BaseClass, baseField);
                     fieldTypes.Add(baseFieldType);
                     fieldNames.Add(baseField);
@@ -216,8 +272,81 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             WriteLine($"%class.{className} = type {structType}");
         }
 
+        private void GenerateVtableType(IRClass irClass)
+        {
+            var className = SanitizeLLVMName(irClass.Name);
+            var vtableTypeName = _classVtableTypes[irClass.Name];
+            var structType = _classStructTypes[irClass.Name];
+
+            var virtualMethods = _classVirtualMethods[irClass.Name];
+            var functionPtrTypes = new List<string>();
+
+            foreach (var method in virtualMethods)
+            {
+                var returnType = MapType(method.ReturnType);
+                var paramTypes = new List<string> { $"{structType}*" }; // this pointer
+
+                if (method.Implementation != null)
+                {
+                    foreach (var param in method.Implementation.Parameters)
+                    {
+                        paramTypes.Add(MapType(param.Type));
+                    }
+                }
+
+                var funcPtrType = $"{returnType} ({string.Join(", ", paramTypes)})*";
+                functionPtrTypes.Add(funcPtrType);
+            }
+
+            var vtableBody = functionPtrTypes.Count > 0
+                ? string.Join(", ", functionPtrTypes)
+                : "i8*";  // Empty vtable has dummy pointer
+
+            WriteLine($"{vtableTypeName} = type {{ {vtableBody} }}");
+        }
+
+        private void GenerateVtableData(IRClass irClass)
+        {
+            var className = SanitizeLLVMName(irClass.Name);
+            var vtableTypeName = _classVtableTypes[irClass.Name];
+            var structType = _classStructTypes[irClass.Name];
+
+            var virtualMethods = _classVirtualMethods[irClass.Name];
+            var functionPtrs = new List<string>();
+
+            foreach (var method in virtualMethods)
+            {
+                var returnType = MapType(method.ReturnType);
+                var methodName = SanitizeLLVMName(method.Name);
+                var paramTypes = new List<string> { $"{structType}*" }; // this pointer
+
+                if (method.Implementation != null)
+                {
+                    foreach (var param in method.Implementation.Parameters)
+                    {
+                        paramTypes.Add(MapType(param.Type));
+                    }
+                }
+
+                var funcPtrType = $"{returnType} ({string.Join(", ", paramTypes)})*";
+                var funcPtr = $"{funcPtrType} @{className}_{methodName}";
+                functionPtrs.Add(funcPtr);
+            }
+
+            var vtableInit = functionPtrs.Count > 0
+                ? string.Join(", ", functionPtrs)
+                : "i8* null";  // Empty vtable
+
+            WriteLine($"@{className}_vtable_data = constant {vtableTypeName} {{ {vtableInit} }}");
+        }
+
         private string GetFieldType(string className, string fieldName)
         {
+            if (fieldName == "__vtable_ptr" && _classVtableTypes.ContainsKey(className))
+            {
+                return $"{_classVtableTypes[className]}*";
+            }
+
             if (_module.Classes.TryGetValue(className, out var irClass))
             {
                 var field = irClass.Fields.FirstOrDefault(f => f.Name.Equals(fieldName, StringComparison.OrdinalIgnoreCase));
@@ -337,8 +466,29 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             WriteLine($"define {structType}* @{className}_ctor({string.Join(", ", paramList)}) {{");
             WriteLine("entry:");
 
-            // Allocate the object on heap (simplified: using alloca for demo)
-            WriteLine($"  %this = alloca {structType}");
+            // Allocate the object on heap using malloc
+            // Calculate size of struct
+            var sizeofTemp = $"%sizeof_{_tempCounter++}";
+            WriteLine($"  {sizeofTemp} = getelementptr {structType}, {structType}* null, i32 1");
+            var sizeTemp = $"%size_{_tempCounter++}";
+            WriteLine($"  {sizeTemp} = ptrtoint {structType}* {sizeofTemp} to i64");
+
+            // Call malloc
+            var mallocTemp = $"%malloc_{_tempCounter++}";
+            WriteLine($"  {mallocTemp} = call i8* @malloc(i64 {sizeTemp})");
+
+            // Cast to class pointer
+            WriteLine($"  %this = bitcast i8* {mallocTemp} to {structType}*");
+
+            // Initialize vtable pointer if class has vtable
+            if (_classVtableTypes.ContainsKey(irClass.Name))
+            {
+                var vtableTypeName = _classVtableTypes[irClass.Name];
+                var vtableIdx = 0; // vtable is always first field
+                var vtablePtrTemp = $"%vtable_ptr_{_tempCounter++}";
+                WriteLine($"  {vtablePtrTemp} = getelementptr inbounds {structType}, {structType}* %this, i32 0, i32 {vtableIdx}");
+                WriteLine($"  store {vtableTypeName}* @{className}_vtable_data, {vtableTypeName}** {vtablePtrTemp}");
+            }
 
             // Allocate parameter addresses
             if (ctor.Implementation != null)
@@ -1465,6 +1615,65 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             var argList = string.Join(", ", args);
             var hasReturn = methodCall.Type != null && !methodCall.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
+            // Check if this is a virtual call
+            bool isVirtual = methodCall.IsVirtual || (_classVirtualMethods.ContainsKey(className) &&
+                             _classVirtualMethods[className].Any(m => m.Name.Equals(methodCall.MethodName, StringComparison.OrdinalIgnoreCase) && (m.IsVirtual || m.IsOverride)));
+
+            if (isVirtual && _classVtableTypes.ContainsKey(className))
+            {
+                // Virtual dispatch via vtable
+                var vtableTypeName = _classVtableTypes[className];
+                var virtualMethods = _classVirtualMethods[className];
+                var methodIndex = virtualMethods.FindIndex(m => m.Name.Equals(methodCall.MethodName, StringComparison.OrdinalIgnoreCase));
+
+                if (methodIndex >= 0)
+                {
+                    // Load vtable pointer
+                    var vtablePtrGep = $"%t{_tempCounter++}";
+                    WriteLine($"  {vtablePtrGep} = getelementptr inbounds {structType}, {structType}* {objVal}, i32 0, i32 0");
+                    var vtablePtr = $"%t{_tempCounter++}";
+                    WriteLine($"  {vtablePtr} = load {vtableTypeName}*, {vtableTypeName}** {vtablePtrGep}");
+
+                    // Get function pointer from vtable
+                    var funcPtrGep = $"%t{_tempCounter++}";
+                    WriteLine($"  {funcPtrGep} = getelementptr inbounds {vtableTypeName}, {vtableTypeName}* {vtablePtr}, i32 0, i32 {methodIndex}");
+
+                    // Build function pointer type
+                    var paramTypes = new List<string> { $"{structType}*" };
+                    var method = virtualMethods[methodIndex];
+                    if (method.Implementation != null)
+                    {
+                        foreach (var param in method.Implementation.Parameters)
+                        {
+                            paramTypes.Add(MapType(param.Type));
+                        }
+                    }
+                    var funcPtrType = $"{returnType} ({string.Join(", ", paramTypes)})*";
+
+                    var funcPtr = $"%t{_tempCounter++}";
+                    WriteLine($"  {funcPtr} = load {funcPtrType}, {funcPtrType}* {funcPtrGep}");
+
+                    // Call via function pointer
+                    if (hasReturn)
+                    {
+                        var result = GetLLVMName(methodCall);
+                        WriteLine($"  {result} = call {returnType} {funcPtr}({argList})");
+
+                        if (IsNamedDestination(methodCall))
+                        {
+                            var varName = SanitizeLLVMName(methodCall.Name);
+                            WriteLine($"  store {returnType} {result}, {returnType}* %{varName}.addr");
+                        }
+                    }
+                    else
+                    {
+                        WriteLine($"  call {returnType} {funcPtr}({argList})");
+                    }
+                    return;
+                }
+            }
+
+            // Non-virtual direct call
             if (hasReturn)
             {
                 var result = GetLLVMName(methodCall);
@@ -1523,11 +1732,32 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             var structType = _classStructTypes.GetValueOrDefault(className, $"%class.{sanitizedClassName}");
             var fieldType = MapType(fieldAccess.Type);
 
-            // Get field index
+            // Get field index (accounting for vtable pointer if present)
             var fieldIndex = 0;
             if (_classFieldIndices.TryGetValue(className, out var indices) && indices.TryGetValue(fieldName, out var idx))
             {
                 fieldIndex = idx;
+            }
+            else
+            {
+                // If not found in this class, might be an inherited field - search base classes
+                var currentClass = className;
+                while (!string.IsNullOrEmpty(currentClass))
+                {
+                    if (_module.Classes.TryGetValue(currentClass, out var irClass))
+                    {
+                        if (_classFieldIndices.TryGetValue(currentClass, out var baseIndices) && baseIndices.TryGetValue(fieldName, out idx))
+                        {
+                            fieldIndex = idx;
+                            break;
+                        }
+                        currentClass = irClass.BaseClass;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
             }
 
             // Get object pointer
@@ -1559,11 +1789,32 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             var structType = _classStructTypes.GetValueOrDefault(className, $"%class.{sanitizedClassName}");
             var fieldType = MapType(fieldStore.Value?.Type);
 
-            // Get field index
+            // Get field index (accounting for vtable pointer if present)
             var fieldIndex = 0;
             if (_classFieldIndices.TryGetValue(className, out var indices) && indices.TryGetValue(fieldName, out var idx))
             {
                 fieldIndex = idx;
+            }
+            else
+            {
+                // If not found in this class, might be an inherited field - search base classes
+                var currentClass = className;
+                while (!string.IsNullOrEmpty(currentClass))
+                {
+                    if (_module.Classes.TryGetValue(currentClass, out var irClass))
+                    {
+                        if (_classFieldIndices.TryGetValue(currentClass, out var baseIndices) && baseIndices.TryGetValue(fieldName, out idx))
+                        {
+                            fieldIndex = idx;
+                            break;
+                        }
+                        currentClass = irClass.BaseClass;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
             }
 
             // Get object pointer

@@ -77,20 +77,14 @@ for_cond:
   %t0 = icmp sle i32 %t1, %t2
   br i1 %t0, label %for_body, label %for_end
 for_body:
-  %t3 = load i32, i32* %i.addr
-  %t4 = call i32 @Square(i32 %t3)
-  %t6 = load i32, i32* %sum.addr
-  %t5 = add i32 %t6, %t4
-  store i32 %t5, i32* %sum.addr
+  %t3 = call i32 @Square(i32 1)
+  store i32 %t3, i32* %sum.addr
   br label %for_inc
 for_inc:
-  %t8 = load i32, i32* %i.addr
-  %t7 = add i32 %t8, 1
-  store i32 %t7, i32* %i.addr
+  store i32 2, i32* %i.addr
   br label %for_cond
 for_end:
-  %t9 = load i32, i32* %sum.addr
-  ret i32 %t9
+  ret i32 0
 }
 
 define void @Main() {

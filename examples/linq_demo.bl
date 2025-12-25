@@ -1,0 +1,162 @@
+' LINQ Query Expressions Demo for BasicLang
+' Demonstrates comprehensive LINQ functionality
+
+Class Person
+    Public Property Name As String
+    Public Property Age As Integer
+    Public Property Department As String
+    Public Property Salary As Double
+End Class
+
+Class Order
+    Public Property CustomerId As Integer
+    Public Property ProductName As String
+    Public Property Amount As Double
+End Class
+
+Sub Main()
+    ' Initialize sample data
+    Dim people As Person() = {
+        New Person With { .Name = "Alice", .Age = 30, .Department = "IT", .Salary = 75000 },
+        New Person With { .Name = "Bob", .Age = 25, .Department = "HR", .Salary = 55000 },
+        New Person With { .Name = "Charlie", .Age = 35, .Department = "IT", .Salary = 85000 },
+        New Person With { .Name = "Diana", .Age = 28, .Department = "Finance", .Salary = 70000 },
+        New Person With { .Name = "Eve", .Age = 32, .Department = "IT", .Salary = 80000 }
+    }
+
+    ' Example 1: Simple filtering and projection
+    PrintLine("Example 1: Adults over 30")
+    Dim adults = From p In people
+                 Where p.Age > 30
+                 Select p.Name
+
+    For Each name In adults
+        PrintLine(name)
+    Next
+
+    ' Example 2: Ordering with descending
+    PrintLine("")
+    PrintLine("Example 2: People by age (descending)")
+    Dim byAge = From p In people
+                Order By p.Age Descending
+                Select New With { .Name = p.Name, .Age = p.Age }
+
+    For Each item In byAge
+        PrintLine(item.Name & " - " & item.Age)
+    Next
+
+    ' Example 3: Group By with Into
+    PrintLine("")
+    PrintLine("Example 3: Group by department")
+    Dim grouped = From p In people
+                  Group By p.Department Into g = Group
+                  Select New With {
+                      .Dept = Department,
+                      .Count = g.Count(),
+                      .AvgSalary = g.Average(Function(x) x.Salary)
+                  }
+
+    For Each group In grouped
+        PrintLine(group.Dept & ": " & group.Count & " employees, avg salary: $" & group.AvgSalary)
+    Next
+
+    ' Example 4: Let clause for intermediate calculations
+    PrintLine("")
+    PrintLine("Example 4: Salary calculations with Let")
+    Dim salaryCalc = From p In people
+                     Let monthlySalary = p.Salary / 12
+                     Where monthlySalary > 6000
+                     Order By monthlySalary Descending
+                     Select New With {
+                         .Name = p.Name,
+                         .Monthly = monthlySalary,
+                         .Annual = p.Salary
+                     }
+
+    For Each item In salaryCalc
+        PrintLine(item.Name & ": $" & item.Monthly & "/month ($" & item.Annual & "/year)")
+    Next
+
+    ' Example 5: Take and Skip
+    PrintLine("")
+    PrintLine("Example 5: Top 3 earners (Skip 1, Take 3)")
+    Dim top3 = From p In people
+               Order By p.Salary Descending
+               Skip 1
+               Take 3
+               Select p.Name
+
+    For Each name In top3
+        PrintLine(name)
+    Next
+
+    ' Example 6: Distinct values
+    PrintLine("")
+    PrintLine("Example 6: Distinct departments")
+    Dim departments = From p In people
+                      Select p.Department
+                      Distinct
+
+    For Each dept In departments
+        PrintLine(dept)
+    Next
+
+    ' Example 7: Complex query with multiple clauses
+    PrintLine("")
+    PrintLine("Example 7: Complex query - IT department, sorted by salary")
+    Dim itEmployees = From p In people
+                      Where p.Department = "IT"
+                      Let bonus = p.Salary * 0.1
+                      Order By p.Salary Descending
+                      Select New With {
+                          .Name = p.Name,
+                          .Age = p.Age,
+                          .Salary = p.Salary,
+                          .Bonus = bonus,
+                          .Total = p.Salary + bonus
+                      }
+
+    For Each emp In itEmployees
+        PrintLine(emp.Name & " (" & emp.Age & "): $" & emp.Total & " (salary: $" & emp.Salary & " + bonus: $" & emp.Bonus & ")")
+    Next
+
+    ' Example 8: Join example (if we have orders data)
+    Dim customers As Integer() = {1, 2, 3}
+    Dim orders As Order() = {
+        New Order With { .CustomerId = 1, .ProductName = "Laptop", .Amount = 1200 },
+        New Order With { .CustomerId = 1, .ProductName = "Mouse", .Amount = 25 },
+        New Order With { .CustomerId = 2, .ProductName = "Keyboard", .Amount = 80 }
+    }
+
+    PrintLine("")
+    PrintLine("Example 8: Join customers with orders")
+    Dim customerOrders = From c In customers
+                         Join o In orders On c Equals o.CustomerId
+                         Select New With {
+                             .CustomerId = c,
+                             .Product = o.ProductName,
+                             .Amount = o.Amount
+                         }
+
+    For Each co In customerOrders
+        PrintLine("Customer " & co.CustomerId & ": " & co.Product & " ($" & co.Amount & ")")
+    Next
+
+    ' Example 9: Group Join
+    PrintLine("")
+    PrintLine("Example 9: Group join - customers with their orders")
+    Dim customerOrderGroups = From c In customers
+                              Join o In orders On c Equals o.CustomerId Into orderGroup
+                              Select New With {
+                                  .CustomerId = c,
+                                  .OrderCount = orderGroup.Count(),
+                                  .TotalAmount = orderGroup.Sum(Function(x) x.Amount)
+                              }
+
+    For Each cog In customerOrderGroups
+        PrintLine("Customer " & cog.CustomerId & ": " & cog.OrderCount & " orders, total: $" & cog.TotalAmount)
+    Next
+
+    PrintLine("")
+    PrintLine("LINQ Demo Complete!")
+End Sub

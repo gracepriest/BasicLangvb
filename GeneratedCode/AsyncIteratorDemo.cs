@@ -36,7 +36,7 @@ namespace GeneratedCode
             while (i <= max)
             {
                 yield return i;
-                i = i + 1;
+                i = 2;
             }
         }
 

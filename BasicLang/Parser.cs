@@ -2891,8 +2891,44 @@ namespace BasicLang.Compiler
                 lambda.ReturnType = ParseTypeReference();
             }
 
-            // Parse body - expression lambda (single expression on same line)
-            lambda.Body = ParseExpression();
+            // Check if this is a single-line or multi-line lambda
+            SkipNewlines();
+
+            // Multi-line lambda: check for statements after newline
+            if (Check(TokenType.Dim) || Check(TokenType.If) || Check(TokenType.For) ||
+                Check(TokenType.While) || Check(TokenType.Do) || Check(TokenType.Try) ||
+                Check(TokenType.Return) || Check(TokenType.Throw))
+            {
+                // Multi-line lambda with statements
+                lambda.StatementBody = new BlockNode(token.Line, token.Column);
+
+                var endToken = isFunction ? TokenType.EndFunction : TokenType.EndSub;
+
+                while (!Check(endToken) && !IsAtEnd())
+                {
+                    try
+                    {
+                        var stmt = ParseStatement();
+                        if (stmt != null)
+                        {
+                            lambda.StatementBody.Statements.Add(stmt);
+                        }
+                    }
+                    catch (ParseException ex)
+                    {
+                        RecordError(ex.Message, ex.Token, ex.Suggestion);
+                        Synchronize();
+                    }
+                    SkipNewlines();
+                }
+
+                Consume(endToken, $"Expected '{(isFunction ? "End Function" : "End Sub")}' to close lambda");
+            }
+            else
+            {
+                // Single-line expression lambda
+                lambda.Body = ParseExpression();
+            }
 
             return lambda;
         }
@@ -2930,13 +2966,73 @@ namespace BasicLang.Compiler
                         Match(TokenType.Ascending);  // Optional Ascending
                     query.Clauses.Add(orderByClause);
                 }
+                else if (Check(TokenType.GroupBy))
+                {
+                    Advance();
+                    var groupByClause = new GroupByClause { Line = Previous().Line, Column = Previous().Column };
+                    groupByClause.KeySelector = ParseExpression();
+
+                    // Optional Into clause: Into g = Group
+                    if (Match(TokenType.Into))
+                    {
+                        groupByClause.IntoVariable = Consume(TokenType.Identifier, "Expected variable name after Into").Lexeme;
+                        Consume(TokenType.Assignment, "Expected '=' after Into variable");
+
+                        // Check for "Group" keyword or expression
+                        if (Check(TokenType.Identifier) && Peek().Lexeme.Equals("Group", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Advance();
+                            groupByClause.IsGroupKeyword = true;
+                        }
+                        else
+                        {
+                            groupByClause.ElementSelector = ParseExpression();
+                        }
+                    }
+                    query.Clauses.Add(groupByClause);
+                }
+                else if (Check(TokenType.Join))
+                {
+                    Advance();
+                    var joinClause = new JoinClause { Line = Previous().Line, Column = Previous().Column };
+                    joinClause.VariableName = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
+                    Consume(TokenType.In, "Expected 'In' after variable name");
+                    joinClause.Collection = ParseExpression();
+                    Consume(TokenType.On, "Expected 'On' in join clause");
+                    joinClause.OuterKeySelector = ParseExpression();
+                    Consume(TokenType.Equals, "Expected 'Equals' in join clause");
+                    joinClause.InnerKeySelector = ParseExpression();
+
+                    // Optional Into for group join
+                    if (Match(TokenType.Into))
+                    {
+                        joinClause.IntoVariable = Consume(TokenType.Identifier, "Expected variable name after Into").Lexeme;
+                    }
+                    query.Clauses.Add(joinClause);
+                }
+                else if (Check(TokenType.Aggregate))
+                {
+                    Advance();
+                    var aggClause = new AggregateClause { Line = Previous().Line, Column = Previous().Column };
+                    aggClause.VariableName = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
+                    Consume(TokenType.In, "Expected 'In' after variable name");
+                    aggClause.Collection = ParseExpression();
+
+                    if (Match(TokenType.Into))
+                    {
+                        aggClause.IntoVariable = Consume(TokenType.Identifier, "Expected variable name after Into").Lexeme;
+                        Consume(TokenType.Assignment, "Expected '=' after Into variable");
+                        aggClause.Selector = ParseExpression();
+                    }
+                    query.Clauses.Add(aggClause);
+                }
                 else if (Check(TokenType.Select))
                 {
                     Advance();
                     var selectClause = new SelectClause { Line = Previous().Line, Column = Previous().Column };
                     selectClause.Selector = ParseExpression();
                     query.Clauses.Add(selectClause);
-                    break;  // Select is always the final clause
+                    break;  // Select is usually the final clause
                 }
                 else if (Check(TokenType.Take))
                 {
@@ -3206,7 +3302,7 @@ namespace BasicLang.Compiler
                     case TokenType.EndModule:
                     case TokenType.EndNamespace:
                     case TokenType.EndSelect:
-                    case TokenType.EndWhile:
+                    case TokenType.Wend:
                     case TokenType.EndStructure:
                     case TokenType.EndInterface:
                     case TokenType.EndEnum:

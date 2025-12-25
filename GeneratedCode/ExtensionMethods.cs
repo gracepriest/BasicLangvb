@@ -24,8 +24,8 @@ namespace GeneratedCode
 
             num = 5;
             d = 3.5;
-            Console.WriteLine("5 doubled: " + Doubled(num));
-            Console.WriteLine("3.5 squared: " + Squared(d));
+            Console.WriteLine("5 doubled: " + Doubled(5));
+            Console.WriteLine("3.5 squared: " + Squared(3.5));
         }
 
     }

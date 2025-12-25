@@ -55,11 +55,19 @@ private:
     double _radius;
 
 public:
-    Circle(double radius)
+    Circle(double radius) : _radius(radius)
     {
         _radius = radius;
         return;
     }
+
+    ~Circle() = default;
+
+    // Auto-generated getter for _radius
+    double getRadius() const { return _radius; }
+
+    // Auto-generated setter for _radius
+    void setRadius(double value) { _radius = value; }
 
     double GetArea()
     {
@@ -83,6 +91,7 @@ public:
 
 };
 
+// Static member initializations
 // Function declarations
 void Main();
 

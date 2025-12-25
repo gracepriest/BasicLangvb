@@ -18,6 +18,10 @@ target triple = "x86_64-pc-windows-msvc"
 ; Class struct types
 %class.Circle = type { double }
 
+; Vtable types
+
+; Vtable data
+
 ; Delegate types (function pointers)
 %delegate.MathOperation = type i32 (i32, i32)*
 %delegate.EventHandler = type void (i8*, i8*)*
@@ -77,11 +81,14 @@ entry:
 ; Class methods
 define %class.Circle* @Circle_ctor(double %radius) {
 entry:
-  %this = alloca %class.Circle
+  %sizeof_0 = getelementptr %class.Circle, %class.Circle* null, i32 1
+  %size_1 = ptrtoint %class.Circle* %sizeof_0 to i64
+  %malloc_2 = call i8* @malloc(i64 %size_1)
+  %this = bitcast i8* %malloc_2 to %class.Circle*
   %radius.addr = alloca double
   store double %radius, double* %radius.addr
-  %t0 = load double, double* %radius.addr
-  store double %t0, double* %_radius.addr
+  %t3 = load double, double* %radius.addr
+  store double %t3, double* %_radius.addr
   ret void
   ret %class.Circle* %this
 }

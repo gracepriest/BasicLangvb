@@ -5,7 +5,8 @@ using BasicLang.Compiler;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler.SemanticAnalysis;
 using BasicLang.Compiler.IR;
-using BasicLang.Backend;
+using BasicLang.Compiler.CodeGen;
+using BasicLang.Compiler.CodeGen.CSharp;
 
 namespace BasicLang.Tests
 {
@@ -41,7 +42,7 @@ namespace BasicLang.Tests
             return (program, analyzer);
         }
 
-        private IRProgram BuildIR(string source)
+        private IRModule BuildIR(string source)
         {
             var (program, analyzer) = AnalyzeProgram(source);
             var irBuilder = new IRBuilder(analyzer);
@@ -50,10 +51,9 @@ namespace BasicLang.Tests
 
         private string CompileToCSharp(string source)
         {
-            var irProgram = BuildIR(source);
-            var backend = new CSharpBackend();
-            var options = new CodeGenOptions { UseStdLib = true };
-            return backend.Generate(irProgram, options);
+            var irModule = BuildIR(source);
+            var backend = new CSharpCodeGenerator();
+            return backend.Generate(irModule);
         }
 
         // ====================================================================
@@ -83,8 +83,8 @@ namespace BasicLang.Tests
 
             // IR Generation
             var irBuilder = new IRBuilder(analyzer);
-            var irProgram = irBuilder.Build(program);
-            Assert.NotNull(irProgram);
+            var irModule = irBuilder.Build(program);
+            Assert.NotNull(irModule);
         }
 
         [Fact]
@@ -102,8 +102,8 @@ End Function";
             var func = Assert.IsType<FunctionNode>(program.Declarations[0]);
             Assert.Equal("Add", func.Name);
 
-            var irProgram = new IRBuilder(analyzer).Build(program);
-            Assert.NotNull(irProgram);
+            var irModule = new IRBuilder(analyzer).Build(program);
+            Assert.NotNull(irModule);
         }
 
         [Fact]

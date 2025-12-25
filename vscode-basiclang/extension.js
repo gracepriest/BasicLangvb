@@ -10,6 +10,9 @@ const {
 let client;
 let outputChannel;
 let projectPath;
+let backendStatusBarItem;
+let errorStatusBarItem;
+let diagnosticCollection;
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -19,6 +22,13 @@ function activate(context) {
     outputChannel.appendLine('BasicLang extension activating...');
 
     const config = vscode.workspace.getConfiguration('basiclang');
+
+    // Create diagnostic collection
+    diagnosticCollection = vscode.languages.createDiagnosticCollection('basiclang');
+    context.subscriptions.push(diagnosticCollection);
+
+    // Create status bar items
+    createStatusBarItems(context);
 
     // Get the server path from settings or use default
     let serverPath = config.get('server.path');
@@ -153,6 +163,59 @@ function activate(context) {
             outputChannel.show();
         })
     );
+
+    // Register build command
+    context.subscriptions.push(
+        vscode.commands.registerCommand('basiclang.build', async () => {
+            await buildProject();
+        })
+    );
+
+    // Register run command
+    context.subscriptions.push(
+        vscode.commands.registerCommand('basiclang.run', async () => {
+            await runProject();
+        })
+    );
+
+    // Register build and run command
+    context.subscriptions.push(
+        vscode.commands.registerCommand('basiclang.buildAndRun', async () => {
+            if (await buildProject()) {
+                await runProject();
+            }
+        })
+    );
+
+    // Register format document command
+    context.subscriptions.push(
+        vscode.commands.registerCommand('basiclang.formatDocument', async () => {
+            await formatDocument();
+        })
+    );
+
+    // Register select backend command
+    context.subscriptions.push(
+        vscode.commands.registerCommand('basiclang.selectBackend', async () => {
+            await selectBackend();
+        })
+    );
+
+    // Listen for configuration changes
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('basiclang.compiler.backend')) {
+                updateBackendStatusBar();
+            }
+        })
+    );
+
+    // Listen for diagnostics updates
+    context.subscriptions.push(
+        vscode.languages.onDidChangeDiagnostics(() => {
+            updateErrorStatusBar();
+        })
+    );
 }
 
 /**
@@ -250,6 +313,237 @@ class BasicLangDebugAdapter {
         if (this._process) {
             this._process.kill();
         }
+    }
+}
+
+/**
+ * Create and initialize status bar items
+ */
+function createStatusBarItems(context) {
+    // Backend status bar item
+    backendStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    backendStatusBarItem.command = 'basiclang.selectBackend';
+    backendStatusBarItem.tooltip = 'Click to change backend';
+    context.subscriptions.push(backendStatusBarItem);
+    updateBackendStatusBar();
+    backendStatusBarItem.show();
+
+    // Error count status bar item
+    errorStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    errorStatusBarItem.command = 'basiclang.showOutput';
+    context.subscriptions.push(errorStatusBarItem);
+    updateErrorStatusBar();
+}
+
+/**
+ * Update backend status bar item
+ */
+function updateBackendStatusBar() {
+    const config = vscode.workspace.getConfiguration('basiclang');
+    const backend = config.get('compiler.backend', 'csharp');
+    backendStatusBarItem.text = `$(code) ${backend.toUpperCase()}`;
+}
+
+/**
+ * Update error count status bar item
+ */
+function updateErrorStatusBar() {
+    const diagnostics = vscode.languages.getDiagnostics();
+    let errorCount = 0;
+    let warningCount = 0;
+
+    for (const [uri, diags] of diagnostics) {
+        if (uri.toString().endsWith('.bas') || uri.toString().endsWith('.basic') || uri.toString().endsWith('.bl')) {
+            for (const diag of diags) {
+                if (diag.severity === vscode.DiagnosticSeverity.Error) {
+                    errorCount++;
+                } else if (diag.severity === vscode.DiagnosticSeverity.Warning) {
+                    warningCount++;
+                }
+            }
+        }
+    }
+
+    if (errorCount > 0 || warningCount > 0) {
+        errorStatusBarItem.text = `$(error) ${errorCount} $(warning) ${warningCount}`;
+        errorStatusBarItem.show();
+    } else {
+        errorStatusBarItem.hide();
+    }
+}
+
+/**
+ * Build the current project
+ */
+async function buildProject() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        vscode.window.showErrorMessage('No active BasicLang file');
+        return false;
+    }
+
+    const document = editor.document;
+    if (document.languageId !== 'basiclang') {
+        vscode.window.showErrorMessage('Current file is not a BasicLang file');
+        return false;
+    }
+
+    await document.save();
+
+    const config = vscode.workspace.getConfiguration('basiclang');
+    const backend = config.get('compiler.backend', 'csharp');
+    const outputPath = config.get('compiler.outputPath', './out');
+    const optimizationLevel = config.get('compiler.optimizationLevel', 'basic');
+    const generateDebugInfo = config.get('compiler.generateDebugInfo', true);
+    const strictMode = config.get('compiler.strictMode', false);
+
+    outputChannel.clear();
+    outputChannel.show(true);
+    outputChannel.appendLine('Building BasicLang project...');
+    outputChannel.appendLine(`Backend: ${backend}`);
+    outputChannel.appendLine(`File: ${document.fileName}`);
+
+    return new Promise((resolve) => {
+        const args = [
+            'run', '--',
+            '--compile', document.fileName,
+            '--backend', backend,
+            '--output', outputPath,
+            '--optimization', optimizationLevel
+        ];
+
+        if (generateDebugInfo) {
+            args.push('--debug');
+        }
+
+        if (strictMode) {
+            args.push('--strict');
+        }
+
+        const buildProcess = spawn('dotnet', args, {
+            cwd: projectPath,
+            shell: true
+        });
+
+        buildProcess.stdout.on('data', (data) => {
+            outputChannel.append(data.toString());
+        });
+
+        buildProcess.stderr.on('data', (data) => {
+            outputChannel.append(data.toString());
+        });
+
+        buildProcess.on('close', (code) => {
+            if (code === 0) {
+                outputChannel.appendLine('\nBuild succeeded!');
+                vscode.window.showInformationMessage('BasicLang: Build succeeded');
+                resolve(true);
+            } else {
+                outputChannel.appendLine(`\nBuild failed with exit code ${code}`);
+                vscode.window.showErrorMessage('BasicLang: Build failed');
+                resolve(false);
+            }
+        });
+
+        buildProcess.on('error', (err) => {
+            outputChannel.appendLine(`\nBuild error: ${err.message}`);
+            vscode.window.showErrorMessage(`BasicLang: Build error - ${err.message}`);
+            resolve(false);
+        });
+    });
+}
+
+/**
+ * Run the current project
+ */
+async function runProject() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        vscode.window.showErrorMessage('No active BasicLang file');
+        return;
+    }
+
+    const document = editor.document;
+    if (document.languageId !== 'basiclang') {
+        vscode.window.showErrorMessage('Current file is not a BasicLang file');
+        return;
+    }
+
+    const config = vscode.workspace.getConfiguration('basiclang');
+    const backend = config.get('compiler.backend', 'csharp');
+    const outputPath = config.get('compiler.outputPath', './out');
+
+    outputChannel.clear();
+    outputChannel.show(true);
+    outputChannel.appendLine('Running BasicLang program...');
+    outputChannel.appendLine(`Backend: ${backend}`);
+
+    return new Promise((resolve) => {
+        const args = ['run', '--', '--run', document.fileName, '--backend', backend];
+
+        const runProcess = spawn('dotnet', args, {
+            cwd: projectPath,
+            shell: true
+        });
+
+        runProcess.stdout.on('data', (data) => {
+            outputChannel.append(data.toString());
+        });
+
+        runProcess.stderr.on('data', (data) => {
+            outputChannel.append(data.toString());
+        });
+
+        runProcess.on('close', (code) => {
+            outputChannel.appendLine(`\nProgram exited with code ${code}`);
+            resolve(code === 0);
+        });
+
+        runProcess.on('error', (err) => {
+            outputChannel.appendLine(`\nRun error: ${err.message}`);
+            vscode.window.showErrorMessage(`BasicLang: Run error - ${err.message}`);
+            resolve(false);
+        });
+    });
+}
+
+/**
+ * Format the current document
+ */
+async function formatDocument() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        vscode.window.showErrorMessage('No active BasicLang file');
+        return;
+    }
+
+    const document = editor.document;
+    if (document.languageId !== 'basiclang') {
+        vscode.window.showErrorMessage('Current file is not a BasicLang file');
+        return;
+    }
+
+    // Use the language server's formatting if available
+    try {
+        await vscode.commands.executeCommand('editor.action.formatDocument');
+    } catch (err) {
+        vscode.window.showErrorMessage(`Format error: ${err.message}`);
+    }
+}
+
+/**
+ * Select compilation backend
+ */
+async function selectBackend() {
+    const backends = ['csharp', 'javascript', 'python', 'llvm'];
+    const selected = await vscode.window.showQuickPick(backends, {
+        placeHolder: 'Select a compilation backend'
+    });
+
+    if (selected) {
+        const config = vscode.workspace.getConfiguration('basiclang');
+        await config.update('compiler.backend', selected, vscode.ConfigurationTarget.Workspace);
+        vscode.window.showInformationMessage(`Backend changed to ${selected.toUpperCase()}`);
     }
 }
 

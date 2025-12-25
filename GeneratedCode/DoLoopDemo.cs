@@ -15,33 +15,33 @@ namespace GeneratedCode
             count = 1;
             while (count <= 3)
             {
-                Console.WriteLine(count);
-                count = count + 1;
+                Console.WriteLine(1);
+                count = 2;
             }
             Console.WriteLine("Do Until...Loop (condition at start):");
             count = 1;
             while (!(count > 3))
             {
-                Console.WriteLine(count);
-                count = count + 1;
+                Console.WriteLine(1);
+                count = 2;
             }
             Console.WriteLine("Do...Loop While (condition at end):");
             count = 1;
-            Console.WriteLine(count);
-            count = count + 1;
+            Console.WriteLine(1);
+            count = 2;
             while (count <= 3)
             {
-                Console.WriteLine(count);
-                count = count + 1;
+                Console.WriteLine(1);
+                count = 2;
             }
             Console.WriteLine("Do...Loop Until (condition at end):");
             count = 1;
-            Console.WriteLine(count);
-            count = count + 1;
+            Console.WriteLine(1);
+            count = 2;
             while (!(count > 3))
             {
-                Console.WriteLine(count);
-                count = count + 1;
+                Console.WriteLine(1);
+                count = 2;
             }
         }
 

@@ -20,7 +20,7 @@ namespace GeneratedCode
                 {
                     max = arr[i];
                 }
-                i = i + 1;
+                i = 2;
             }
             return max;
         }

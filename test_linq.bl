@@ -1,0 +1,62 @@
+Sub Main()
+    ' Test basic LINQ query
+    Dim numbers As Integer() = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+
+    ' Simple Where and Select
+    Dim evens = From n In numbers
+                Where n % 2 = 0
+                Select n
+
+    PrintLine("Even numbers:")
+    For Each num In evens
+        PrintLine(num)
+    Next
+
+    ' OrderBy test
+    Dim sorted = From n In numbers
+                 Where n > 5
+                 Order By n Descending
+                 Select n
+
+    PrintLine("")
+    PrintLine("Numbers > 5 (descending):")
+    For Each num In sorted
+        PrintLine(num)
+    Next
+
+    ' Take and Skip test
+    Dim subset = From n In numbers
+                 Skip 3
+                 Take 4
+                 Select n
+
+    PrintLine("")
+    PrintLine("Skip 3, Take 4:")
+    For Each num In subset
+        PrintLine(num)
+    Next
+
+    ' Let clause test
+    Dim squared = From n In numbers
+                  Let sq = n * n
+                  Where sq > 25
+                  Select sq
+
+    PrintLine("")
+    PrintLine("Squares > 25:")
+    For Each num In squared
+        PrintLine(num)
+    Next
+
+    ' Distinct test
+    Dim duplicates As Integer() = {1, 2, 2, 3, 3, 3, 4, 5, 5}
+    Dim unique = From n In duplicates
+                 Distinct
+                 Select n
+
+    PrintLine("")
+    PrintLine("Distinct values:")
+    For Each num In unique
+        PrintLine(num)
+    Next
+End Sub

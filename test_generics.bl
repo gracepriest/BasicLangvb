@@ -1,0 +1,107 @@
+Class Stack(Of T)
+    Private _items(99) As T
+    Private _count As Integer
+
+    Sub New()
+        _count = 0
+    End Sub
+
+    Sub Push(item As T)
+        If _count < 100 Then
+            _items(_count) = item
+            _count = _count + 1
+        End If
+    End Sub
+
+    Function Pop() As T
+        If _count > 0 Then
+            _count = _count - 1
+            Dim result As T = _items(_count)
+            Return result
+        End If
+        Return Nothing
+    End Function
+
+    Function Peek() As T
+        If _count > 0 Then
+            Return _items(_count - 1)
+        End If
+        Return Nothing
+    End Function
+
+    Function GetCount() As Integer
+        Return _count
+    End Function
+
+    Function IsEmpty() As Boolean
+        Return _count = 0
+    End Function
+End Class
+
+Class Pair(Of TKey, TValue)
+    Public Key As TKey
+    Public Value As TValue
+
+    Sub New(k As TKey, v As TValue)
+        Key = k
+        Value = v
+    End Sub
+
+    Function ToString() As String
+        Return "(" & CStr(Key) & ", " & CStr(Value) & ")"
+    End Function
+End Class
+
+' Generic function example
+Function Swap(Of T)(ByRef a As T, ByRef b As T)
+    Dim temp As T = a
+    a = b
+    b = temp
+End Function
+
+Function CreatePair(Of T1, T2)(first As T1, second As T2) As Pair(Of T1, T2)
+    Return New Pair(Of T1, T2)(first, second)
+End Function
+
+Sub Main()
+    ' Test generic Stack with Integer
+    Dim intStack As New Stack(Of Integer)
+    intStack.Push(1)
+    intStack.Push(2)
+    intStack.Push(3)
+
+    PrintLine("Integer Stack:")
+    PrintLine("Count: " & CStr(intStack.GetCount()))
+    PrintLine("Pop: " & CStr(intStack.Pop()))
+    PrintLine("Peek: " & CStr(intStack.Peek()))
+    PrintLine("Count: " & CStr(intStack.GetCount()))
+
+    ' Test generic Stack with String
+    Dim stringStack As New Stack(Of String)
+    stringStack.Push("Hello")
+    stringStack.Push("World")
+    stringStack.Push("!")
+
+    PrintLine("")
+    PrintLine("String Stack:")
+    PrintLine("Count: " & CStr(stringStack.GetCount()))
+    PrintLine("Pop: " & stringStack.Pop())
+    PrintLine("Peek: " & stringStack.Peek())
+
+    ' Test generic Pair
+    Dim pair1 As New Pair(Of String, Integer)("Age", 25)
+    Dim pair2 As Pair(Of Integer, String) = CreatePair(42, "Answer")
+
+    PrintLine("")
+    PrintLine("Pairs:")
+    PrintLine(pair1.ToString())
+    PrintLine(pair2.ToString())
+
+    ' Test generic Swap function
+    Dim x As Integer = 10
+    Dim y As Integer = 20
+    PrintLine("")
+    PrintLine("Before swap: x=" & CStr(x) & ", y=" & CStr(y))
+    Swap(x, y)
+    PrintLine("After swap: x=" & CStr(x) & ", y=" & CStr(y))
+End Sub

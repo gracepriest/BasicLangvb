@@ -1,0 +1,18 @@
+' Simple generics test
+Class Box(Of T)
+    Public Value As T
+
+    Sub New(v As T)
+        Value = v
+    End Sub
+
+    Function GetValue() As T
+        Return Value
+    End Function
+End Class
+
+Sub Main()
+    Dim intBox As New Box(Of Integer)(42)
+    Dim result As Integer = intBox.GetValue()
+    PrintLine(result)
+End Sub

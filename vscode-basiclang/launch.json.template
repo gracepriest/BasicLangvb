@@ -1,0 +1,36 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "basiclang",
+      "request": "launch",
+      "name": "Debug Current File",
+      "program": "${file}",
+      "stopOnEntry": true
+    },
+    {
+      "type": "basiclang",
+      "request": "launch",
+      "name": "Debug with C# Backend",
+      "program": "${file}",
+      "stopOnEntry": false,
+      "backend": "csharp"
+    },
+    {
+      "type": "basiclang",
+      "request": "launch",
+      "name": "Debug with JavaScript Backend",
+      "program": "${file}",
+      "stopOnEntry": false,
+      "backend": "javascript"
+    },
+    {
+      "type": "basiclang",
+      "request": "launch",
+      "name": "Debug with Python Backend",
+      "program": "${file}",
+      "stopOnEntry": false,
+      "backend": "python"
+    }
+  ]
+}
