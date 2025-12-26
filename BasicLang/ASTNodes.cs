@@ -31,6 +31,7 @@ namespace BasicLang.Compiler.AST
         void Visit(FunctionNode node);
         void Visit(ClassNode node);
         void Visit(StructureNode node);
+        void Visit(UnionNode node);
         void Visit(TypeNode node);
         void Visit(InterfaceNode node);
         void Visit(EnumNode node);
@@ -93,6 +94,14 @@ namespace BasicLang.Compiler.AST
         void Visit(AwaitExpressionNode node);
         void Visit(YieldStatementNode node);
         void Visit(LinqQueryExpressionNode node);
+        void Visit(InlineCodeNode node);
+        void Visit(PreprocessorDefineNode node);
+        void Visit(PreprocessorUndefineNode node);
+        void Visit(PreprocessorIfNode node);
+        void Visit(PreprocessorIncludeNode node);
+        void Visit(PreprocessorConstNode node);
+        void Visit(PreprocessorRegionNode node);
+        void Visit(DeclareNode node);
     }
     
     // ============================================================================
@@ -187,6 +196,8 @@ namespace BasicLang.Compiler.AST
         public bool IsArray { get; set; }
         public bool IsNullable { get; set; }
         public bool IsTuple { get; set; }
+        public bool IsFixedLengthString { get; set; }
+        public int FixedStringLength { get; set; }
         public List<int> ArrayDimensions { get; set; }
         public List<TypeReference> GenericArguments { get; set; }
         public List<TypeReference> TupleElementTypes { get; set; }
@@ -199,6 +210,8 @@ namespace BasicLang.Compiler.AST
             IsArray = false;
             IsNullable = false;
             IsTuple = false;
+            IsFixedLengthString = false;
+            FixedStringLength = 0;
             ArrayDimensions = new List<int>();
             GenericArguments = new List<TypeReference>();
             TupleElementTypes = new List<TypeReference>();
@@ -279,15 +292,28 @@ namespace BasicLang.Compiler.AST
     {
         public string Name { get; set; }
         public List<VariableDeclarationNode> Members { get; set; }
-        
+
         public StructureNode(int line, int column) : base(line, column)
         {
             Members = new List<VariableDeclarationNode>();
         }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
-    
+
+    public class UnionNode : ASTNode
+    {
+        public string Name { get; set; }
+        public List<VariableDeclarationNode> Members { get; set; }
+
+        public UnionNode(int line, int column) : base(line, column)
+        {
+            Members = new List<VariableDeclarationNode>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
     // ============================================================================
     // Object-Oriented Programming
     // ============================================================================
@@ -404,9 +430,20 @@ namespace BasicLang.Compiler.AST
     public class UsingDirectiveNode : ASTNode
     {
         public string Namespace { get; set; }
-        
+
+        /// <summary>
+        /// If true, this is a .NET Framework/BCL namespace import (e.g., System.IO)
+        /// If false, this is a BasicLang module import
+        /// </summary>
+        public bool IsNetNamespace { get; set; }
+
+        /// <summary>
+        /// Optional alias for the namespace (e.g., Using IO = System.IO)
+        /// </summary>
+        public string Alias { get; set; }
+
         public UsingDirectiveNode(int line, int column) : base(line, column) { }
-        
+
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
     
@@ -832,6 +869,73 @@ namespace BasicLang.Compiler.AST
         {
             return PlatformImplementations.ContainsKey(platform);
         }
+    }
+
+    /// <summary>
+    /// Represents a VB/FreeBASIC-style Declare statement for C library imports
+    /// </summary>
+    /// <example>
+    /// Declare Function MessageBoxA Lib "user32.dll" Alias "MessageBoxA" (hwnd As Integer, text As String) As Integer
+    /// Declare Sub Sleep CDecl Lib "msvcrt.dll" (milliseconds As Integer)
+    /// </example>
+    public class DeclareNode : ASTNode
+    {
+        /// <summary>
+        /// True if this is a Function (returns value), false if Sub (void)
+        /// </summary>
+        public bool IsFunction { get; set; }
+
+        /// <summary>
+        /// Name of the declared function/sub in BasicLang code
+        /// </summary>
+        public string Name { get; set; }
+
+        /// <summary>
+        /// The library/DLL name (e.g., "user32.dll", "libc.so")
+        /// </summary>
+        public string LibraryName { get; set; }
+
+        /// <summary>
+        /// The actual function name in the library (if different from Name)
+        /// </summary>
+        public string AliasName { get; set; }
+
+        /// <summary>
+        /// Calling convention (CDecl, StdCall, etc.)
+        /// </summary>
+        public CallingConvention Convention { get; set; }
+
+        /// <summary>
+        /// Parameters for the external function
+        /// </summary>
+        public List<ParameterNode> Parameters { get; set; }
+
+        /// <summary>
+        /// Return type (for functions)
+        /// </summary>
+        public TypeReference ReturnType { get; set; }
+
+        public DeclareNode(int line, int column) : base(line, column)
+        {
+            Parameters = new List<ParameterNode>();
+            Convention = CallingConvention.Default;
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+
+        /// <summary>
+        /// Gets the actual name to call in the library (AliasName if specified, otherwise Name)
+        /// </summary>
+        public string GetActualName() => !string.IsNullOrEmpty(AliasName) ? AliasName : Name;
+    }
+
+    public enum CallingConvention
+    {
+        Default,   // Platform default
+        CDecl,     // C calling convention
+        StdCall,   // Windows standard calling convention
+        FastCall,  // Fast calling convention
+        ThisCall   // C++ member function calling convention
     }
 
     // ============================================================================
@@ -1380,6 +1484,106 @@ namespace BasicLang.Compiler.AST
         public bool IsBreak { get; set; }  // Yield Break vs Yield Return
 
         public YieldStatementNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    /// <summary>
+    /// Inline code block for embedding native code: csharp{ ... }, cpp{ ... }, llvm{ ... }, msil{ ... }
+    /// </summary>
+    public class InlineCodeNode : StatementNode
+    {
+        public string Language { get; set; }  // "csharp", "cpp", "llvm", "msil"
+        public string Code { get; set; }       // The raw code content
+
+        public InlineCodeNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    // ============================================================================
+    // Preprocessor Directives
+    // ============================================================================
+
+    public class PreprocessorDefineNode : ASTNode
+    {
+        public string Name { get; set; }
+        public string Value { get; set; }  // Optional value for the definition
+
+        public PreprocessorDefineNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    public class PreprocessorUndefineNode : ASTNode
+    {
+        public string Name { get; set; }
+
+        public PreprocessorUndefineNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    public class PreprocessorIfNode : ASTNode
+    {
+        public ExpressionNode Condition { get; set; }
+        public List<ASTNode> ThenBody { get; set; }
+        public List<PreprocessorElseIfClause> ElseIfClauses { get; set; }
+        public List<ASTNode> ElseBody { get; set; }
+
+        public PreprocessorIfNode(int line, int column) : base(line, column)
+        {
+            ThenBody = new List<ASTNode>();
+            ElseIfClauses = new List<PreprocessorElseIfClause>();
+            ElseBody = new List<ASTNode>();
+        }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    public class PreprocessorElseIfClause
+    {
+        public ExpressionNode Condition { get; set; }
+        public List<ASTNode> Body { get; set; }
+        public int Line { get; set; }
+        public int Column { get; set; }
+
+        public PreprocessorElseIfClause(int line, int column)
+        {
+            Body = new List<ASTNode>();
+            Line = line;
+            Column = column;
+        }
+    }
+
+    public class PreprocessorIncludeNode : ASTNode
+    {
+        public string FilePath { get; set; }
+
+        public PreprocessorIncludeNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    public class PreprocessorConstNode : ASTNode
+    {
+        public string Name { get; set; }
+        public ExpressionNode Value { get; set; }
+
+        public PreprocessorConstNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    public class PreprocessorRegionNode : ASTNode
+    {
+        public string Name { get; set; }
+        public List<ASTNode> Body { get; set; }
+
+        public PreprocessorRegionNode(int line, int column) : base(line, column)
+        {
+            Body = new List<ASTNode>();
+        }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }

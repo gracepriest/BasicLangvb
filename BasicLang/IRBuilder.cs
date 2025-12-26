@@ -157,7 +157,12 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(UsingDirectiveNode node)
         {
-            // No IR generation needed
+            // If this is a .NET namespace, add it to the module's NetUsings
+            if (node.IsNetNamespace)
+            {
+                _module.NetUsings.Add(new NetUsingDirective(node.Namespace, node.Alias));
+            }
+            // BasicLang module usings don't need IR generation
         }
 
         public void Visit(ImportDirectiveNode node)
@@ -765,6 +770,11 @@ namespace BasicLang.Compiler.IR
             // Structures don't generate IR directly
         }
 
+        public void Visit(UnionNode node)
+        {
+            // Unions don't generate IR directly - handled by code generators
+        }
+
         public void Visit(TemplateDeclarationNode node)
         {
             // Templates are expanded before IR generation
@@ -825,7 +835,7 @@ namespace BasicLang.Compiler.IR
             {
                 Name = node.Name,
                 IsFunction = node.IsFunction,
-                ReturnType = node.ReturnType?.Name ?? "Void",
+                ReturnType = new TypeInfo(node.ReturnType?.Name ?? "Void", node.ReturnType?.Name == "Void" || node.ReturnType == null ? TypeKind.Void : TypeKind.Primitive),
                 PlatformImplementations = new Dictionary<string, string>(node.PlatformImplementations)
             };
 
@@ -1595,6 +1605,120 @@ namespace BasicLang.Compiler.IR
             _expressionResult = result;
         }
 
+        public void Visit(InlineCodeNode node)
+        {
+            // Create an inline code instruction that the code generator will handle
+            var inlineInstr = new IRInlineCode(node.Language, node.Code);
+            _currentBlock.AddInstruction(inlineInstr);
+        }
+
+        // ====================================================================
+        // Preprocessor Directives
+        // ====================================================================
+        // Note: Preprocessor directives are typically processed before IR generation.
+        // These methods handle cases where preprocessor nodes reach the IR builder.
+
+        public void Visit(PreprocessorDefineNode node)
+        {
+            // Preprocessor #Define is typically handled during preprocessing
+            _currentBlock.AddInstruction(new IRComment($"#Define {node.Name}" + (node.Value != null ? $" = {node.Value}" : "")));
+        }
+
+        public void Visit(PreprocessorUndefineNode node)
+        {
+            _currentBlock.AddInstruction(new IRComment($"#Undefine {node.Name}"));
+        }
+
+        public void Visit(PreprocessorIfNode node)
+        {
+            // In a true preprocessor, this would conditionally include/exclude code
+            // For now, emit all branches with comments
+            _currentBlock.AddInstruction(new IRComment("#If block"));
+            foreach (var stmt in node.ThenBody)
+            {
+                stmt.Accept(this);
+            }
+
+            foreach (var elseIf in node.ElseIfClauses)
+            {
+                _currentBlock.AddInstruction(new IRComment("#ElseIf block"));
+                foreach (var stmt in elseIf.Body)
+                {
+                    stmt.Accept(this);
+                }
+            }
+
+            if (node.ElseBody.Count > 0)
+            {
+                _currentBlock.AddInstruction(new IRComment("#Else block"));
+                foreach (var stmt in node.ElseBody)
+                {
+                    stmt.Accept(this);
+                }
+            }
+            _currentBlock.AddInstruction(new IRComment("#EndIf"));
+        }
+
+        public void Visit(PreprocessorIncludeNode node)
+        {
+            _currentBlock.AddInstruction(new IRComment($"#Include \"{node.FilePath}\""));
+        }
+
+        public void Visit(PreprocessorConstNode node)
+        {
+            _currentBlock.AddInstruction(new IRComment($"#Const {node.Name}"));
+        }
+
+        public void Visit(PreprocessorRegionNode node)
+        {
+            _currentBlock.AddInstruction(new IRComment($"#Region {node.Name}"));
+            foreach (var stmt in node.Body)
+            {
+                stmt.Accept(this);
+            }
+            _currentBlock.AddInstruction(new IRComment("#End Region"));
+        }
+
+        public void Visit(DeclareNode node)
+        {
+            // Create an extern declaration in the IR module
+            var externDecl = new IRExternDeclaration
+            {
+                Name = node.Name,
+                IsFunction = node.IsFunction,
+                LibraryName = node.LibraryName,
+                AliasName = node.AliasName,
+                CallingConvention = node.Convention.ToString()
+            };
+
+            // Add parameters
+            foreach (var param in node.Parameters)
+            {
+                externDecl.Parameters.Add(new IRParameter
+                {
+                    Name = param.Name,
+                    TypeName = param.Type?.Name ?? "Object",
+                    Type = new TypeInfo(param.Type?.Name ?? "Object", TypeKind.Primitive),
+                    IsOptional = param.IsOptional,
+                    IsParamArray = param.IsParamArray,
+                    IsByRef = param.IsByRef,
+                    DefaultValue = BuildExpressionValue(param.DefaultValue)
+                });
+            }
+
+            // Set return type
+            if (node.IsFunction && node.ReturnType != null)
+            {
+                externDecl.ReturnType = new TypeInfo(node.ReturnType.Name, TypeKind.Primitive);
+            }
+            else
+            {
+                externDecl.ReturnType = new TypeInfo("Void", TypeKind.Void);
+            }
+
+            _module.ExternDeclarations[node.Name] = externDecl;
+        }
+
         // ====================================================================
         // Statements
         // ====================================================================
@@ -2092,31 +2216,70 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(TryStatementNode node)
         {
-            // Simplified exception handling
-            // Full support would require runtime support
-
+            // Create all blocks first
             var tryBlock = _currentFunction.CreateBlock("try.body");
             var endBlock = _currentFunction.CreateBlock("try.end");
 
-            EmitInstruction(new IRComment("Begin try block"));
-            EmitInstruction(new IRBranch(tryBlock));
+            // Create catch blocks and build IRCatchClause list
+            var catchClauses = new List<IRCatchClause>();
+            var catchBlockList = new List<(CatchClauseNode clause, BasicBlock block)>();
+            foreach (var catchClause in node.CatchClauses)
+            {
+                var catchBlock = _currentFunction.CreateBlock("catch.body");
+                var exceptionType = catchClause.ExceptionType != null
+                    ? new TypeInfo(catchClause.ExceptionType.Name, TypeKind.Class)
+                    : new TypeInfo("Exception", TypeKind.Class);
+                catchClauses.Add(new IRCatchClause(exceptionType, catchClause.ExceptionVariable, catchBlock));
+                catchBlockList.Add((catchClause, catchBlock));
+            }
 
+            // Create finally block if present
+            BasicBlock finallyBlock = null;
+            if (node.FinallyBlock != null)
+            {
+                finallyBlock = _currentFunction.CreateBlock("finally.body");
+            }
+
+            // Emit the try-catch instruction in the current block
+            EmitInstruction(new IRTryCatch(tryBlock, catchClauses, finallyBlock, endBlock));
+
+            // Generate try block body
             _currentBlock = tryBlock;
             node.TryBlock.Accept(this);
-
             if (!_currentBlock.IsTerminated())
             {
                 EmitInstruction(new IRBranch(endBlock));
             }
 
-            // Catch blocks
-            foreach (var catchClause in node.CatchClauses)
+            // Generate catch block bodies
+            foreach (var (catchClause, catchBlock) in catchBlockList)
             {
-                var catchBlock = _currentFunction.CreateBlock("catch.body");
                 _currentBlock = catchBlock;
 
-                EmitInstruction(new IRComment($"Catch {catchClause.ExceptionType?.Name ?? "Exception"}"));
+                // Declare the exception variable in scope if present
+                var exceptionType = catchClause.ExceptionType != null
+                    ? new TypeInfo(catchClause.ExceptionType.Name, TypeKind.Class)
+                    : new TypeInfo("Exception", TypeKind.Class);
+                if (!string.IsNullOrEmpty(catchClause.ExceptionVariable))
+                {
+                    // Create a local variable for the exception
+                    var exVar = new IRVariable(catchClause.ExceptionVariable, exceptionType);
+                    // Push onto variable versions stack so it's accessible in the catch block
+                    if (!_variableVersions.ContainsKey(catchClause.ExceptionVariable))
+                    {
+                        _variableVersions[catchClause.ExceptionVariable] = new Stack<IRVariable>();
+                    }
+                    _variableVersions[catchClause.ExceptionVariable].Push(exVar);
+                }
+
                 catchClause.Body.Accept(this);
+
+                // Pop the exception variable
+                if (!string.IsNullOrEmpty(catchClause.ExceptionVariable) &&
+                    _variableVersions.ContainsKey(catchClause.ExceptionVariable))
+                {
+                    _variableVersions[catchClause.ExceptionVariable].Pop();
+                }
 
                 if (!_currentBlock.IsTerminated())
                 {
@@ -2124,15 +2287,11 @@ namespace BasicLang.Compiler.IR
                 }
             }
 
-            // Finally block
-            if (node.FinallyBlock != null)
+            // Generate finally block body if present
+            if (finallyBlock != null)
             {
-                var finallyBlock = _currentFunction.CreateBlock("finally.body");
                 _currentBlock = finallyBlock;
-
-                EmitInstruction(new IRComment("Finally block"));
                 node.FinallyBlock.Accept(this);
-
                 if (!_currentBlock.IsTerminated())
                 {
                     EmitInstruction(new IRBranch(endBlock));
@@ -2492,6 +2651,7 @@ namespace BasicLang.Compiler.IR
                 // Check if the object is a reference to a class type (static call) by:
                 // 1. It's an IRVariable with the EXACT name of a class (case-sensitive)
                 // 2. The identifier doesn't match a local variable in the current function
+                // 3. It's a known .NET static type (Console, Math, File, etc.)
                 bool isStaticCall = false;
                 if (obj is IRVariable objVar)
                 {
@@ -2501,8 +2661,13 @@ namespace BasicLang.Compiler.IR
                     bool isLocalOrParam = _currentFunction?.Parameters.Any(p => p.Name == objVar.Name) == true ||
                                           _locals.ContainsKey(objVar.Name);
 
-                    // It's a static call only if it matches a class name exactly AND is not a local/param
-                    isStaticCall = exactClassMatch && !isLocalOrParam;
+                    // Check if it's a .NET type (contains dot or is known .NET type name)
+                    bool isNetType = objVar.Name.Contains('.') || IsKnownNetStaticType(objVar.Name);
+
+                    // It's a static call if:
+                    // - It matches a class name exactly AND is not a local/param, OR
+                    // - It's a .NET type
+                    isStaticCall = (exactClassMatch && !isLocalOrParam) || isNetType;
                 }
 
                 if (isStaticCall && obj is IRVariable staticVar)
@@ -2716,6 +2881,24 @@ namespace BasicLang.Compiler.IR
                 return source.Name == "Double" ? CastKind.FPTrunc : CastKind.FPExt;
 
             return CastKind.Bitcast;
+        }
+
+        /// <summary>
+        /// Known .NET static types/classes that should be treated as static method targets
+        /// </summary>
+        private static readonly HashSet<string> KnownNetStaticTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Console", "Math", "Environment", "Convert", "BitConverter",
+            "File", "Directory", "Path",
+            "String", "Char", "Int32", "Int64", "Double", "Boolean",
+            "Activator", "Type", "Enum", "Array", "Buffer",
+            "GC", "AppDomain", "Assembly",
+            "Task", "Thread", "Monitor", "Interlocked"
+        };
+
+        private bool IsKnownNetStaticType(string name)
+        {
+            return KnownNetStaticTypes.Contains(name);
         }
 
         private class LoopContext

@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
 namespace GeneratedCode
@@ -47,21 +48,35 @@ namespace GeneratedCode
 
         public static void ProcessData(int value)
         {
-            // Begin try block
-            if (value < 0)
+            try
             {
-                // Throw exception
+                if (value < 0)
+                {
+                    // Throw exception
+                }
+                Str(value);
+                Console.WriteLine("Processing: " + Str(value));
             }
-            Console.WriteLine("Processing: " + Str(value));
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error: " + ex.Message);
+            }
+            finally
+            {
+                Console.WriteLine("Cleanup complete");
+            }
         }
 
         public static void Main()
         {
-            Stack intStack = null;
+            Stack intStack = default!;
             int maxVal = 0;
 
             Console.WriteLine("=== Generics Demo ===");
             intStack = new Stack();
+            intStack.Push(10);
+            intStack.Push(20);
+            intStack.Push(30);
             Console.WriteLine("Popped: " + Str(intStack.Pop()));
             maxVal = Math.Max(42, 17);
             Console.WriteLine("Max value: " + Str(maxVal));

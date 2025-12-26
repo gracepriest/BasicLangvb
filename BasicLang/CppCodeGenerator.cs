@@ -121,6 +121,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine();
             }
 
+            // Generate extern "C" declarations for C library interop
+            if (module.ExternDeclarations.Count > 0)
+            {
+                WriteLine("// External C library declarations");
+                WriteLine("extern \"C\" {");
+                Indent();
+                foreach (var externDecl in module.ExternDeclarations.Values)
+                {
+                    GenerateExternDeclaration(externDecl);
+                }
+                Unindent();
+                WriteLine("}");
+                WriteLine();
+            }
+
             // Get standalone functions (not class methods)
             var standaloneFunctions = module.Functions
                 .Where(f => !f.IsExternal && !IsClassMethod(f, module))
@@ -1309,8 +1324,60 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine($"{type} {SanitizeName(tupleElement.Name)} = std::get<{tupleElement.Index}>({tuple});");
         }
 
+        public override void Visit(IRTryCatch tryCatch)
+        {
+            // C++ exception handling with try-catch
+            WriteLine("try");
+            WriteLine("{");
+            Indent();
+            foreach (var inst in tryCatch.TryBlock.Instructions)
+            {
+                if (inst is IRBranch or IRConditionalBranch) continue;
+                inst.Accept(this);
+            }
+            Unindent();
+            WriteLine("}");
+
+            foreach (var catchClause in tryCatch.CatchClauses)
+            {
+                var exType = catchClause.ExceptionType?.Name ?? "std::exception";
+                var varName = !string.IsNullOrEmpty(catchClause.VariableName)
+                    ? SanitizeName(catchClause.VariableName)
+                    : "ex";
+                WriteLine($"catch (const {exType}& {varName})");
+                WriteLine("{");
+                Indent();
+                foreach (var inst in catchClause.Block.Instructions)
+                {
+                    if (inst is IRBranch or IRConditionalBranch) continue;
+                    inst.Accept(this);
+                }
+                Unindent();
+                WriteLine("}");
+            }
+        }
+
+        public override void Visit(IRInlineCode inlineCode)
+        {
+            if (inlineCode.Language.ToLower() == "cpp")
+            {
+                // Emit the C++ code directly
+                WriteLine("// Inline C++ code");
+                foreach (var line in inlineCode.Code.Split('\n'))
+                {
+                    WriteLine(line.TrimEnd());
+                }
+            }
+            else
+            {
+                // For non-C++ inline code, emit a comment indicating it's not supported
+                WriteLine($"// WARNING: Inline {inlineCode.Language} code not supported in C++ backend");
+                WriteLine($"// Original code ({inlineCode.Code.Length} chars) was skipped");
+            }
+        }
+
         #endregion
-        
+
         private string MapBinaryOperator(BinaryOpKind op) => op switch
         {
             BinaryOpKind.Add => "+",
@@ -1420,6 +1487,48 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         private void Write(string text) => _output.Append(text);
         
+        /// <summary>
+        /// Generate extern declaration for C library interop
+        /// </summary>
+        private void GenerateExternDeclaration(IRExternDeclaration externDecl)
+        {
+            // Skip if this is a platform-specific extern
+            if (string.IsNullOrEmpty(externDecl.LibraryName) && externDecl.PlatformImplementations.Count > 0)
+            {
+                // This is a platform-specific extern, check for C++ implementation
+                if (externDecl.PlatformImplementations.TryGetValue("Cpp", out var impl))
+                {
+                    WriteLine(impl);
+                }
+                return;
+            }
+
+            // Build the function declaration
+            var returnType = externDecl.IsFunction
+                ? MapType(externDecl.ReturnType)
+                : "void";
+
+            var paramList = new List<string>();
+            foreach (var param in externDecl.Parameters)
+            {
+                var paramType = MapType(param.Type);
+                var paramName = SanitizeName(param.Name);
+
+                // Handle ByRef parameters
+                if (param.IsByRef)
+                {
+                    paramList.Add($"{paramType}& {paramName}");
+                }
+                else
+                {
+                    paramList.Add($"{paramType} {paramName}");
+                }
+            }
+
+            var methodName = SanitizeName(externDecl.Name);
+            WriteLine($"{returnType} {methodName}({string.Join(", ", paramList)});");
+        }
+
         private void WriteLine(string text = "")
         {
             if (!string.IsNullOrEmpty(text))
@@ -1433,7 +1542,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
         }
     }
-    
+
     public class CppCodeGenOptions
     {
         public int IndentSize { get; set; } = 4;

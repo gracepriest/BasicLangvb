@@ -240,12 +240,24 @@ namespace BasicLang.Compiler
         /// </summary>
         public List<string> ResolvedPaths { get; set; }
 
-        public UsingInfo(string namespaceName, int line, int column)
+        /// <summary>
+        /// If true, this is a .NET Framework/BCL namespace (e.g., System.IO)
+        /// </summary>
+        public bool IsNetNamespace { get; set; }
+
+        /// <summary>
+        /// Optional alias for the namespace (e.g., Using IO = System.IO)
+        /// </summary>
+        public string Alias { get; set; }
+
+        public UsingInfo(string namespaceName, int line, int column, bool isNetNamespace = false, string alias = null)
         {
             Namespace = namespaceName;
             Line = line;
             Column = column;
             ResolvedPaths = new List<string>();
+            IsNetNamespace = isNetNamespace;
+            Alias = alias;
         }
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
 namespace GeneratedCode
@@ -49,10 +50,12 @@ namespace GeneratedCode
     {
         public static void Main()
         {
-            Button btn = null;
+            Button btn = default!;
 
             btn = new Button("Submit");
             Console.WriteLine("Button text: " + btn.Text);
+            btn.OnClick(100, 200);
+            btn.OnMouseEnter();
         }
 
     }

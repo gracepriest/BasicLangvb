@@ -40,14 +40,22 @@ namespace BasicLang.Compiler
         String,
         Boolean,
         Char,
+        Byte,
+        Short,
+        UByte,
+        UShort,
+        UInteger,
+        ULong,
         Pointer,
         To,
         
         // Keywords - User-Defined Types
         Type,
         Structure,
+        Union,
         EndType,
         EndStructure,
+        EndUnion,
         
         // Keywords - Control Flow
         If,
@@ -93,12 +101,6 @@ namespace BasicLang.Compiler
         Finally,
         EndTry,
         Throw,
-        
-        // Keywords - Compilation Directives
-        HashIf,
-        HashElseIf,
-        HashElse,
-        HashEndIf,
         
         // Keywords - Templates
         Template,
@@ -197,9 +199,34 @@ namespace BasicLang.Compiler
         // Keywords - Platform Externs
         Extern,
         EndExtern,
+        Declare,       // Declare Function/Sub for C library imports
+        Lib,           // Library name in Declare statement
+        Alias,         // Alias name in Declare statement
+        CDecl,         // Calling convention
+        StdCall,       // Calling convention
 
-        // Keywords - Functions
+        // Keywords - Inline Code Blocks
+        InlineCSharp,      // csharp{ ... }
+        InlineCpp,         // cpp{ ... }
+        InlineLLVM,        // llvm{ ... }
+        InlineMSIL,        // msil{ ... }
+        InlineCode,        // Generic inline code token with content
+
+        // Preprocessor Directives
+        PreprocessorDefine,    // #Define
+        PreprocessorUndefine,  // #Undefine
+        PreprocessorIf,        // #If
+        PreprocessorElseIf,    // #ElseIf
+        PreprocessorElse,      // #Else
+        PreprocessorEndIf,     // #EndIf
+        PreprocessorInclude,   // #Include
+        PreprocessorConst,     // #Const
+        PreprocessorRegion,    // #Region
+        PreprocessorEndRegion, // #End Region
+
+        // Keywords - Functions/Pointers
         AddressOf,
+        Deref,
         Len,
         Mid,
         UBound,
@@ -303,7 +330,22 @@ namespace BasicLang.Compiler
             return $"[{Type}] '{Lexeme}' at ({Line}, {Column})";
         }
     }
-    
+
+    /// <summary>
+    /// Holds the language and code content for inline code blocks
+    /// </summary>
+    public class InlineCodeValue
+    {
+        public string Language { get; }  // "csharp", "cpp", "llvm", "msil"
+        public string Code { get; }
+
+        public InlineCodeValue(string language, string code)
+        {
+            Language = language;
+            Code = code;
+        }
+    }
+
     /// <summary>
     /// Lexer for BasicLang
     /// </summary>
@@ -332,14 +374,22 @@ namespace BasicLang.Compiler
             { "String", TokenType.String },
             { "Boolean", TokenType.Boolean },
             { "Char", TokenType.Char },
+            { "Byte", TokenType.Byte },
+            { "Short", TokenType.Short },
+            { "UByte", TokenType.UByte },
+            { "UShort", TokenType.UShort },
+            { "UInteger", TokenType.UInteger },
+            { "ULong", TokenType.ULong },
             { "Pointer", TokenType.Pointer },
             { "To", TokenType.To },
             
             // User-Defined Types
             { "Type", TokenType.Type },
             { "Structure", TokenType.Structure },
+            { "Union", TokenType.Union },
             { "End Type", TokenType.EndType },
             { "End Structure", TokenType.EndStructure },
+            { "End Union", TokenType.EndUnion },
             
             // Control Flow
             { "If", TokenType.If },
@@ -481,9 +531,21 @@ namespace BasicLang.Compiler
             // Platform Externs
             { "Extern", TokenType.Extern },
             { "End Extern", TokenType.EndExtern },
-            
+            { "Declare", TokenType.Declare },
+            { "Lib", TokenType.Lib },
+            { "Alias", TokenType.Alias },
+            { "CDecl", TokenType.CDecl },
+            { "StdCall", TokenType.StdCall },
+
+            // Inline Code Blocks
+            { "csharp", TokenType.InlineCSharp },
+            { "cpp", TokenType.InlineCpp },
+            { "llvm", TokenType.InlineLLVM },
+            { "msil", TokenType.InlineMSIL },
+
             // Built-in Functions (special syntax, not regular function calls)
             { "AddressOf", TokenType.AddressOf },
+            { "Deref", TokenType.Deref },
             { "SizeOf", TokenType.SizeOf },
             { "AllocateMemory", TokenType.AllocateMemory },
             { "DeallocateMemory", TokenType.DeallocateMemory },
@@ -720,34 +782,79 @@ namespace BasicLang.Compiler
         private void ScanDirective(int startLine, int startColumn)
         {
             StringBuilder sb = new StringBuilder("#");
-            
+
             while (!IsAtEnd() && IsAlphaNumeric(Peek()))
             {
                 sb.Append(Advance());
             }
-            
+
             string directive = sb.ToString();
             TokenType type;
-            
+
             switch (directive.ToLower())
             {
                 case "#if":
-                    type = TokenType.HashIf;
+                    type = TokenType.PreprocessorIf;
                     break;
                 case "#elseif":
-                    type = TokenType.HashElseIf;
+                    type = TokenType.PreprocessorElseIf;
                     break;
                 case "#else":
-                    type = TokenType.HashElse;
+                    type = TokenType.PreprocessorElse;
                     break;
                 case "#endif":
-                    type = TokenType.HashEndIf;
+                    type = TokenType.PreprocessorEndIf;
+                    break;
+                case "#define":
+                    type = TokenType.PreprocessorDefine;
+                    break;
+                case "#undef":
+                case "#undefine":
+                    type = TokenType.PreprocessorUndefine;
+                    break;
+                case "#include":
+                    type = TokenType.PreprocessorInclude;
+                    break;
+                case "#const":
+                    type = TokenType.PreprocessorConst;
+                    break;
+                case "#region":
+                    type = TokenType.PreprocessorRegion;
                     break;
                 default:
-                    type = TokenType.Unknown;
+                    // Check for #End Region (with space)
+                    if (directive.ToLower() == "#end")
+                    {
+                        SkipWhitespace();
+                        if (!IsAtEnd() && IsAlpha(Peek()))
+                        {
+                            var nextWord = new StringBuilder();
+                            while (!IsAtEnd() && IsAlphaNumeric(Peek()))
+                            {
+                                nextWord.Append(Advance());
+                            }
+                            if (nextWord.ToString().Equals("region", StringComparison.OrdinalIgnoreCase))
+                            {
+                                type = TokenType.PreprocessorEndRegion;
+                                directive = "#End Region";
+                            }
+                            else
+                            {
+                                type = TokenType.Unknown;
+                            }
+                        }
+                        else
+                        {
+                            type = TokenType.Unknown;
+                        }
+                    }
+                    else
+                    {
+                        type = TokenType.Unknown;
+                    }
                     break;
             }
-            
+
             AddToken(type, directive, null, startLine, startColumn);
         }
         
@@ -932,19 +1039,27 @@ namespace BasicLang.Compiler
         {
             StringBuilder sb = new StringBuilder();
             sb.Append(firstChar);
-            
+
             while (!IsAtEnd() && IsAlphaNumeric(Peek()))
             {
                 sb.Append(Advance());
             }
-            
+
             string identifier = sb.ToString();
-            
+
+            // After a dot, treat everything as an identifier (member access)
+            // This allows using keywords as member names like obj.Property
+            if (_tokens.Count > 0 && _tokens[_tokens.Count - 1].Type == TokenType.Dot)
+            {
+                AddToken(TokenType.Identifier, identifier, identifier, startLine, startColumn);
+                return;
+            }
+
             // Check for multi-word keywords (e.g., "End If", "End Sub")
             if (identifier.Equals("End", StringComparison.OrdinalIgnoreCase))
             {
                 SkipWhitespaceNoNewline();
-                
+
                 if (!IsAtEnd() && IsAlpha(Peek()))
                 {
                     StringBuilder secondWord = new StringBuilder();
@@ -952,9 +1067,9 @@ namespace BasicLang.Compiler
                     {
                         secondWord.Append(Advance());
                     }
-                    
+
                     string multiWord = $"{identifier} {secondWord}";
-                    
+
                     if (_keywords.TryGetValue(multiWord, out TokenType keywordType))
                     {
                         AddToken(keywordType, multiWord, null, startLine, startColumn);
@@ -962,18 +1077,33 @@ namespace BasicLang.Compiler
                     }
                 }
             }
-            
+
             // Check for single-word keyword
             if (_keywords.TryGetValue(identifier, out TokenType type))
             {
                 object value = null;
-                
+
                 // Handle boolean literals
                 if (type == TokenType.BooleanLiteral)
                 {
                     value = identifier.Equals("True", StringComparison.OrdinalIgnoreCase);
                 }
-                
+
+                // Handle inline code blocks: csharp{ }, cpp{ }, llvm{ }, msil{ }
+                if (type == TokenType.InlineCSharp || type == TokenType.InlineCpp ||
+                    type == TokenType.InlineLLVM || type == TokenType.InlineMSIL)
+                {
+                    SkipWhitespace();
+                    if (!IsAtEnd() && Peek() == '{')
+                    {
+                        Advance(); // Consume '{'
+                        string code = ScanInlineCodeContent();
+                        string language = identifier.ToLower();
+                        AddToken(TokenType.InlineCode, $"{language}{{{code}}}", new InlineCodeValue(language, code), startLine, startColumn);
+                        return;
+                    }
+                }
+
                 AddToken(type, identifier, value, startLine, startColumn);
             }
             else
@@ -1030,7 +1160,7 @@ namespace BasicLang.Compiler
         {
             return IsAlpha(c) || IsDigit(c);
         }
-        
+
         private char Peek()
         {
             if (IsAtEnd())
@@ -1064,7 +1194,49 @@ namespace BasicLang.Compiler
         {
             return _position >= _source.Length;
         }
-        
+
+        private string ScanInlineCodeContent()
+        {
+            StringBuilder sb = new StringBuilder();
+            int braceDepth = 1;
+
+            while (!IsAtEnd() && braceDepth > 0)
+            {
+                char c = Advance();
+
+                if (c == '{')
+                {
+                    braceDepth++;
+                    sb.Append(c);
+                }
+                else if (c == '}')
+                {
+                    braceDepth--;
+                    if (braceDepth > 0)
+                    {
+                        sb.Append(c);
+                    }
+                    // Don't append the final closing brace
+                }
+                else
+                {
+                    if (c == '\n')
+                    {
+                        _line++;
+                        _column = 1;
+                    }
+                    sb.Append(c);
+                }
+            }
+
+            if (braceDepth > 0)
+            {
+                throw new Exception($"Unterminated inline code block at line {_line}");
+            }
+
+            return sb.ToString().Trim();
+        }
+
         private void AddToken(TokenType type, string lexeme, object value)
         {
             AddToken(type, lexeme, value, _line, _column - lexeme.Length);

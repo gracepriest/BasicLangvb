@@ -1,10 +1,13 @@
 using System.Collections.Generic;
+using System.Linq;
+using BasicLang.Compiler.SemanticAnalysis;
 using OmniSharp.Extensions.LanguageServer.Protocol.Models;
 
 namespace BasicLang.Compiler.LSP
 {
     /// <summary>
-    /// Service that provides completion items
+    /// Service that provides completion items.
+    /// Queries the compiler core (SemanticAnalyzer/TypeRegistry) for IntelliSense.
     /// </summary>
     public class CompletionService
     {
@@ -15,6 +18,15 @@ namespace BasicLang.Compiler.LSP
         {
             var completions = new List<CompletionItem>();
 
+            // Check if we're completing after a dot (member access)
+            var triggerContext = GetTriggerContext(state, line, character);
+            if (triggerContext.IsMemberAccess)
+            {
+                // Get member completions for the object type
+                completions.AddRange(GetMemberCompletions(state, triggerContext.ObjectName));
+                return completions;
+            }
+
             // Add keywords
             completions.AddRange(GetKeywordCompletions());
 
@@ -24,13 +36,214 @@ namespace BasicLang.Compiler.LSP
             // Add built-in types
             completions.AddRange(GetTypeCompletions());
 
-            // Add symbols from the current document
+            // Add symbols from the current document (via SemanticAnalyzer)
             if (state?.SemanticAnalyzer != null)
             {
                 completions.AddRange(GetSymbolCompletions(state));
+
+                // Add .NET types from the TypeRegistry
+                completions.AddRange(GetNetTypeCompletions(state));
             }
 
             return completions;
+        }
+
+        /// <summary>
+        /// Determine if we're completing after a dot and get the object name
+        /// </summary>
+        private (bool IsMemberAccess, string ObjectName) GetTriggerContext(DocumentState state, int line, int character)
+        {
+            if (state?.SourceCode == null || line < 0)
+                return (false, null);
+
+            var lines = state.SourceCode.Split('\n');
+            if (line >= lines.Length)
+                return (false, null);
+
+            var currentLine = lines[line];
+            if (character <= 0 || character > currentLine.Length)
+                return (false, null);
+
+            // Look for a dot before the cursor
+            var beforeCursor = currentLine.Substring(0, character).TrimEnd();
+            if (!beforeCursor.EndsWith("."))
+                return (false, null);
+
+            // Get the object name before the dot
+            var withoutDot = beforeCursor.Substring(0, beforeCursor.Length - 1).TrimEnd();
+            var objectName = ExtractLastIdentifier(withoutDot);
+
+            return (true, objectName);
+        }
+
+        /// <summary>
+        /// Extract the last identifier from a string (handles expressions like "obj.Method().Property")
+        /// </summary>
+        private string ExtractLastIdentifier(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return null;
+
+            // Simple case: just an identifier
+            var result = new System.Text.StringBuilder();
+            for (int i = text.Length - 1; i >= 0; i--)
+            {
+                var c = text[i];
+                if (char.IsLetterOrDigit(c) || c == '_')
+                {
+                    result.Insert(0, c);
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            return result.Length > 0 ? result.ToString() : null;
+        }
+
+        /// <summary>
+        /// Get member completions for a type
+        /// </summary>
+        private IEnumerable<CompletionItem> GetMemberCompletions(DocumentState state, string objectName)
+        {
+            if (string.IsNullOrEmpty(objectName) || state?.SemanticAnalyzer == null)
+                yield break;
+
+            // First, check if it's a .NET type (for static members)
+            var netType = state.SemanticAnalyzer.GetNetType(objectName);
+            if (netType != null)
+            {
+                foreach (var member in netType.Members)
+                {
+                    // For static types, only show static members
+                    if (netType.IsStatic && !member.IsStatic)
+                        continue;
+
+                    yield return CreateMemberCompletionItem(member);
+                }
+                yield break;
+            }
+
+            // Check if it's a variable with a known type
+            var symbol = state.SemanticAnalyzer.GlobalScope?.Resolve(objectName);
+            if (symbol != null && symbol.Type != null)
+            {
+                // Try to get .NET type members
+                var typeName = symbol.Type.Name;
+                netType = state.SemanticAnalyzer.GetNetType(typeName);
+                if (netType != null)
+                {
+                    foreach (var member in netType.Members)
+                    {
+                        // For instance variables, show instance members
+                        if (member.IsStatic)
+                            continue;
+
+                        yield return CreateMemberCompletionItem(member);
+                    }
+                }
+
+                // Also check user-defined type members
+                if (symbol.Type.Members != null)
+                {
+                    foreach (var memberKvp in symbol.Type.Members)
+                    {
+                        yield return new CompletionItem
+                        {
+                            Label = memberKvp.Key,
+                            Kind = GetCompletionKind(memberKvp.Value.Kind),
+                            Detail = $"{memberKvp.Value.Name} As {memberKvp.Value.Type?.Name ?? "Object"}",
+                            InsertText = memberKvp.Key
+                        };
+                    }
+                }
+            }
+        }
+
+        private CompletionItem CreateMemberCompletionItem(NetMemberInfo member)
+        {
+            var kind = member.Kind switch
+            {
+                NetMemberKind.Method => CompletionItemKind.Method,
+                NetMemberKind.Property => CompletionItemKind.Property,
+                NetMemberKind.Field => CompletionItemKind.Field,
+                NetMemberKind.Event => CompletionItemKind.Event,
+                NetMemberKind.EnumValue => CompletionItemKind.EnumMember,
+                _ => CompletionItemKind.Text
+            };
+
+            var detail = member.GetSignature();
+            var insertText = member.Name;
+
+            // Add parentheses for methods
+            if (member.Kind == NetMemberKind.Method)
+            {
+                if (member.Parameters.Count == 0)
+                {
+                    insertText = $"{member.Name}()";
+                }
+                else
+                {
+                    // Create snippet with parameter placeholders
+                    var paramSnippets = member.Parameters.Select((p, i) => $"${{{i + 1}:{p.Name}}}");
+                    insertText = $"{member.Name}({string.Join(", ", paramSnippets)})";
+                }
+            }
+
+            return new CompletionItem
+            {
+                Label = member.Name,
+                Kind = kind,
+                Detail = detail,
+                InsertTextFormat = member.Kind == NetMemberKind.Method ? InsertTextFormat.Snippet : InsertTextFormat.PlainText,
+                InsertText = insertText
+            };
+        }
+
+        private CompletionItemKind GetCompletionKind(SemanticAnalysis.SymbolKind kind)
+        {
+            return kind switch
+            {
+                SemanticAnalysis.SymbolKind.Function => CompletionItemKind.Function,
+                SemanticAnalysis.SymbolKind.Subroutine => CompletionItemKind.Function,
+                SemanticAnalysis.SymbolKind.Variable => CompletionItemKind.Variable,
+                SemanticAnalysis.SymbolKind.Constant => CompletionItemKind.Constant,
+                SemanticAnalysis.SymbolKind.Parameter => CompletionItemKind.Variable,
+                SemanticAnalysis.SymbolKind.Class => CompletionItemKind.Class,
+                SemanticAnalysis.SymbolKind.Interface => CompletionItemKind.Interface,
+                SemanticAnalysis.SymbolKind.Structure => CompletionItemKind.Struct,
+                SemanticAnalysis.SymbolKind.Property => CompletionItemKind.Property,
+                SemanticAnalysis.SymbolKind.Event => CompletionItemKind.Event,
+                _ => CompletionItemKind.Text
+            };
+        }
+
+        /// <summary>
+        /// Get .NET type completions from the TypeRegistry
+        /// </summary>
+        private IEnumerable<CompletionItem> GetNetTypeCompletions(DocumentState state)
+        {
+            if (state?.SemanticAnalyzer?.TypeRegistry == null)
+                yield break;
+
+            foreach (var netType in state.SemanticAnalyzer.GetLoadedNetTypes())
+            {
+                var kind = netType.IsInterface ? CompletionItemKind.Interface :
+                           netType.IsEnum ? CompletionItemKind.Enum :
+                           netType.IsStruct ? CompletionItemKind.Struct :
+                           CompletionItemKind.Class;
+
+                var detail = netType.IsStatic ? $"Static Class {netType.FullName}" : $"Class {netType.FullName}";
+
+                yield return new CompletionItem
+                {
+                    Label = netType.Name,
+                    Kind = kind,
+                    Detail = detail,
+                    InsertText = netType.Name
+                };
+            }
         }
 
         private IEnumerable<CompletionItem> GetKeywordCompletions()

@@ -95,6 +95,8 @@ namespace BasicLang.Compiler
                 return ParseType();
             if (Check(TokenType.Structure))
                 return ParseStructure();
+            if (Check(TokenType.Union))
+                return ParseUnion();
             if (Check(TokenType.Template))
                 return ParseTemplate();
             if (Check(TokenType.Delegate))
@@ -103,6 +105,8 @@ namespace BasicLang.Compiler
                 return ParseTypeDefine();
             if (Check(TokenType.Extern))
                 return ParseExtern();
+            if (Check(TokenType.Declare))
+                return ParseDeclare();
             if (Check(TokenType.Extension))
                 return ParseExtensionMethod();
             // Handle MustInherit modifier for classes
@@ -285,7 +289,34 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Using, "Expected 'Using'");
             var node = new UsingDirectiveNode(token.Line, token.Column);
 
-            node.Namespace = Consume(TokenType.Identifier, "Expected namespace name").Lexeme;
+            // Parse the first identifier
+            var firstIdent = Consume(TokenType.Identifier, "Expected namespace name").Lexeme;
+
+            // Check for alias syntax: Using Alias = Namespace.Name
+            if (Match(TokenType.Equals))
+            {
+                node.Alias = firstIdent;
+                firstIdent = Consume(TokenType.Identifier, "Expected namespace name after '='").Lexeme;
+            }
+
+            // Build the full namespace name (handle dotted names like System.IO.File)
+            var namespaceBuilder = new System.Text.StringBuilder(firstIdent);
+            while (Match(TokenType.Dot))
+            {
+                namespaceBuilder.Append('.');
+                namespaceBuilder.Append(Consume(TokenType.Identifier, "Expected identifier after '.'").Lexeme);
+            }
+
+            node.Namespace = namespaceBuilder.ToString();
+
+            // Detect if this is a .NET namespace
+            // Common .NET namespace prefixes
+            var netNamespacePrefixes = new[] { "System", "Microsoft", "Windows", "Mono" };
+            node.IsNetNamespace = node.Namespace.Contains('.') ||
+                                  Array.Exists(netNamespacePrefixes, prefix =>
+                                      node.Namespace.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||
+                                      node.Namespace.StartsWith(prefix + ".", StringComparison.OrdinalIgnoreCase));
+
             ConsumeNewlines();
 
             return node;
@@ -331,22 +362,25 @@ namespace BasicLang.Compiler
                     Consume(TokenType.RightParen, "Expected ')' after generic parameters");
                 }
 
-                // Inheritance
+                // Allow Inherits/Implements on same line or next line(s)
+                ConsumeNewlines();
+
+                // Inheritance (can appear on its own line)
                 if (Match(TokenType.Inherits))
                 {
                     node.BaseClass = Consume(TokenType.Identifier, "Expected base class name").Lexeme;
+                    ConsumeNewlines();
                 }
 
-                // Interfaces
-                if (Match(TokenType.Implements))
+                // Interfaces (can appear on its own line, supports multiple)
+                while (Match(TokenType.Implements))
                 {
                     do
                     {
                         node.Interfaces.Add(Consume(TokenType.Identifier, "Expected interface name").Lexeme);
                     } while (Match(TokenType.Comma));
+                    ConsumeNewlines();
                 }
-
-                ConsumeNewlines();
 
                 // Class members
                 while (!Check(TokenType.EndClass) && !IsAtEnd())
@@ -1046,6 +1080,31 @@ namespace BasicLang.Compiler
             return node;
         }
 
+        private UnionNode ParseUnion()
+        {
+            var token = Consume(TokenType.Union, "Expected 'Union'");
+            var node = new UnionNode(token.Line, token.Column);
+
+            node.Name = Consume(TokenType.Identifier, "Expected union name").Lexeme;
+            ConsumeNewlines();
+
+            while (!Check(TokenType.EndUnion) && !IsAtEnd())
+            {
+                if (Check(TokenType.Identifier))
+                {
+                    var member = new VariableDeclarationNode(Peek().Line, Peek().Column);
+                    member.Name = Consume(TokenType.Identifier, "Expected member name").Lexeme;
+                    Consume(TokenType.As, "Expected 'As'");
+                    member.Type = ParseTypeReference();
+                    node.Members.Add(member);
+                }
+                SkipNewlines();
+            }
+
+            Consume(TokenType.EndUnion, "Expected 'End Union'");
+            return node;
+        }
+
         private TypeDefineNode ParseTypeDefine()
         {
             var token = Consume(TokenType.TypeDefine, "Expected 'TypeDefine'");
@@ -1270,6 +1329,100 @@ namespace BasicLang.Compiler
             }
 
             Consume(TokenType.EndExtern, "Expected 'End Extern'");
+
+            return node;
+        }
+
+        /// <summary>
+        /// Parse a Declare statement for C library interop
+        /// </summary>
+        /// <remarks>
+        /// Syntax:
+        /// Declare [CDecl|StdCall] Function Name Lib "library.dll" [Alias "realname"] (params) As ReturnType
+        /// Declare [CDecl|StdCall] Sub Name Lib "library.dll" [Alias "realname"] (params)
+        /// </remarks>
+        private DeclareNode ParseDeclare()
+        {
+            var token = Consume(TokenType.Declare, "Expected 'Declare'");
+            var node = new DeclareNode(token.Line, token.Column);
+
+            // Check for optional calling convention
+            if (Match(TokenType.CDecl))
+            {
+                node.Convention = CallingConvention.CDecl;
+            }
+            else if (Match(TokenType.StdCall))
+            {
+                node.Convention = CallingConvention.StdCall;
+            }
+            else
+            {
+                node.Convention = CallingConvention.Default;
+            }
+
+            // Parse Function or Sub
+            if (Match(TokenType.Function))
+            {
+                node.IsFunction = true;
+            }
+            else if (Match(TokenType.Sub))
+            {
+                node.IsFunction = false;
+            }
+            else
+            {
+                throw new ParseException("Expected 'Function' or 'Sub' after 'Declare'", Peek());
+            }
+
+            // Parse function/sub name
+            node.Name = Consume(TokenType.Identifier, "Expected function/sub name").Lexeme;
+
+            // Parse Lib clause
+            Consume(TokenType.Lib, "Expected 'Lib' keyword");
+            var libToken = Consume(TokenType.StringLiteral, "Expected library name string");
+            node.LibraryName = libToken.Lexeme;
+            if (node.LibraryName.StartsWith("\"") && node.LibraryName.EndsWith("\""))
+            {
+                node.LibraryName = node.LibraryName.Substring(1, node.LibraryName.Length - 2);
+            }
+
+            // Parse optional Alias clause
+            if (Match(TokenType.Alias))
+            {
+                var aliasToken = Consume(TokenType.StringLiteral, "Expected alias name string");
+                node.AliasName = aliasToken.Lexeme;
+                if (node.AliasName.StartsWith("\"") && node.AliasName.EndsWith("\""))
+                {
+                    node.AliasName = node.AliasName.Substring(1, node.AliasName.Length - 2);
+                }
+            }
+
+            // Parse parameters
+            if (Match(TokenType.LeftParen))
+            {
+                if (!Check(TokenType.RightParen))
+                {
+                    do
+                    {
+                        node.Parameters.Add(ParseParameter());
+                    } while (Match(TokenType.Comma));
+                }
+                Consume(TokenType.RightParen, "Expected ')' after parameters");
+            }
+
+            // Parse return type for functions
+            if (node.IsFunction)
+            {
+                if (Match(TokenType.As))
+                {
+                    node.ReturnType = ParseTypeReference();
+                }
+                else
+                {
+                    // Default return type if not specified
+                    node.ReturnType = new TypeReference("Object");
+                }
+            }
 
             return node;
         }
@@ -1675,8 +1828,15 @@ namespace BasicLang.Compiler
             node.IsAuto = true;
 
             node.Name = Consume(TokenType.Identifier, "Expected variable name").Lexeme;
-            Consume(TokenType.Assignment, "Expected '=' in auto declaration");
-            node.Initializer = ParseExpression();
+
+            // Initializer is required for Auto, but parse it optionally
+            // so semantic analyzer can report a better error
+            if (Match(TokenType.Assignment))
+            {
+                node.Initializer = ParseExpression();
+            }
+            // If no initializer, node.Initializer remains null
+            // and semantic analyzer will report error
 
             return node;
         }
@@ -1721,8 +1881,15 @@ namespace BasicLang.Compiler
             node.Name = Consume(TokenType.Identifier, "Expected constant name").Lexeme;
             Consume(TokenType.As, "Expected 'As'");
             node.Type = ParseTypeReference();
-            Consume(TokenType.Assignment, "Expected '=' in constant declaration");
-            node.Value = ParseExpression();
+
+            // Value is required for Const, but parse it optionally
+            // so semantic analyzer can report a better error
+            if (Match(TokenType.Assignment))
+            {
+                node.Value = ParseExpression();
+            }
+            // If no value, node.Value remains null
+            // and semantic analyzer will report error
 
             return node;
         }
@@ -1798,13 +1965,22 @@ namespace BasicLang.Compiler
             string typeName;
             if (Check(TokenType.Integer) || Check(TokenType.Long) || Check(TokenType.Single) ||
                 Check(TokenType.Double) || Check(TokenType.String) || Check(TokenType.Boolean) ||
-                Check(TokenType.Char))
+                Check(TokenType.Char) || Check(TokenType.Byte) || Check(TokenType.Short) ||
+                Check(TokenType.UByte) || Check(TokenType.UShort) || Check(TokenType.UInteger) ||
+                Check(TokenType.ULong))
             {
                 typeName = Advance().Lexeme;
             }
             else if (Check(TokenType.Identifier))
             {
-                typeName = Advance().Lexeme;
+                // Parse potentially dotted type name (e.g., System.IO.File, System.Text.StringBuilder)
+                var typeNameBuilder = new System.Text.StringBuilder(Advance().Lexeme);
+                while (Match(TokenType.Dot))
+                {
+                    typeNameBuilder.Append('.');
+                    typeNameBuilder.Append(Consume(TokenType.Identifier, "Expected type name after '.'").Lexeme);
+                }
+                typeName = typeNameBuilder.ToString();
             }
             else
             {
@@ -1812,6 +1988,20 @@ namespace BasicLang.Compiler
             }
 
             type = new TypeReference(typeName);
+
+            // Fixed-length string: String * 20
+            if (typeName.Equals("String", StringComparison.OrdinalIgnoreCase) && Match(TokenType.Multiply))
+            {
+                if (Check(TokenType.IntegerLiteral))
+                {
+                    type.IsFixedLengthString = true;
+                    type.FixedStringLength = int.Parse(Advance().Value.ToString());
+                }
+                else
+                {
+                    throw new ParseException("Expected integer literal after 'String *'", Peek());
+                }
+            }
 
             // Generic arguments - only if we see '(' followed by 'Of'
             // Check both before consuming the paren
@@ -1901,6 +2091,8 @@ namespace BasicLang.Compiler
                 return ParseAddHandlerStatement();
             if (Check(TokenType.RemoveHandler))
                 return ParseRemoveHandlerStatement();
+            if (Check(TokenType.InlineCode))
+                return ParseInlineCode();
 
             // Assignment or expression statement
             return ParseAssignmentOrExpressionStatement();
@@ -1929,6 +2121,20 @@ namespace BasicLang.Compiler
                 // Yield value (without Return keyword)
                 node.Value = ParseExpression();
             }
+
+            return node;
+        }
+
+        private InlineCodeNode ParseInlineCode()
+        {
+            var token = Consume(TokenType.InlineCode, "Expected inline code block");
+            var inlineValue = token.Value as InlineCodeValue;
+
+            var node = new InlineCodeNode(token.Line, token.Column)
+            {
+                Language = inlineValue?.Language ?? "unknown",
+                Code = inlineValue?.Code ?? ""
+            };
 
             return node;
         }
@@ -2016,15 +2222,8 @@ namespace BasicLang.Compiler
                         ConsumeNewlines();
                         var elseIfBlock = ParseBlock(TokenType.Else, TokenType.ElseIf, TokenType.EndIf);
 
-                        // Store ElseIf as nested If in the Else clause
-                        var elseIfNode = new IfStatementNode(token.Line, token.Column);
-                        elseIfNode.Condition = elseIfCondition;
-                        elseIfNode.ThenBlock = elseIfBlock;
-
-                        var elseBlock = new BlockNode(token.Line, token.Column);
-                        elseBlock.Statements.Add(elseIfNode);
-                        node.ElseBlock = elseBlock;
-                        node = elseIfNode;
+                        // Add to ElseIfClauses list
+                        node.ElseIfClauses.Add((elseIfCondition, elseIfBlock));
                     }
 
                     // ✓ Handle Else clause (fully implemented)
@@ -2470,14 +2669,118 @@ namespace BasicLang.Compiler
                 return assignment;
             }
 
+            // Check for VB-style subroutine call without parentheses: PrintLine "Hello"
+            // This is an identifier (or member access) followed by an argument
+            if (IsVbStyleCallStatement(target))
+            {
+                var callExpr = new CallExpressionNode(target.Line, target.Column);
+                callExpr.Callee = target;
+
+                // Parse arguments until end of line
+                while (!Check(TokenType.Newline) && !Check(TokenType.Colon) && !IsAtEnd() &&
+                       !IsStatementTerminator())
+                {
+                    callExpr.Arguments.Add(ParseExpression());
+                    if (!Match(TokenType.Comma))
+                        break;
+                }
+
+                var exprStmt = new ExpressionStatementNode(callExpr.Line, callExpr.Column);
+                exprStmt.Expression = callExpr;
+                return exprStmt;
+            }
+
             // Not an assignment - continue parsing as a full expression
             // The target we parsed is just the start of the expression
             var expr = ParseExpressionContinuation(target);
 
             // Expression statement
-            var exprStmt = new ExpressionStatementNode(expr.Line, expr.Column);
-            exprStmt.Expression = expr;
-            return exprStmt;
+            var exprStmt2 = new ExpressionStatementNode(expr.Line, expr.Column);
+            exprStmt2.Expression = expr;
+            return exprStmt2;
+        }
+
+        /// <summary>
+        /// Check if the current state indicates a VB-style call statement without parentheses.
+        /// E.g., PrintLine "Hello" or Debug.Print message
+        /// </summary>
+        private bool IsVbStyleCallStatement(ExpressionNode target)
+        {
+            // Target must be an identifier or member access (potential subroutine/function name)
+            if (!(target is IdentifierExpressionNode) && !(target is MemberAccessExpressionNode))
+                return false;
+
+            // If the target is already a call expression, it's not a VB-style call
+            if (target is CallExpressionNode)
+                return false;
+
+            // Next token must be the start of an expression (potential argument)
+            // but NOT an assignment operator, binary operator, or end of statement
+            var next = Peek();
+
+            // Skip if it's end of statement
+            if (next.Type == TokenType.Newline || next.Type == TokenType.Colon ||
+                next.Type == TokenType.EOF)
+                return false;
+
+            // Skip if it's an assignment operator
+            if (next.Type == TokenType.Assignment || next.Type == TokenType.PlusAssign ||
+                next.Type == TokenType.MinusAssign || next.Type == TokenType.MultiplyAssign ||
+                next.Type == TokenType.DivideAssign)
+                return false;
+
+            // Skip if it's a binary operator (not a call, but a binary expression)
+            if (IsBinaryOperator(next))
+                return false;
+
+            // Skip if it's a postfix operator (dot, paren, bracket)
+            if (next.Type == TokenType.Dot || next.Type == TokenType.LeftParen ||
+                next.Type == TokenType.LeftBracket)
+                return false;
+
+            // It looks like a VB-style call: identifier followed by an expression argument
+            return IsExpressionStart(next);
+        }
+
+        /// <summary>
+        /// Check if a token could start an expression
+        /// </summary>
+        private bool IsExpressionStart(Token token)
+        {
+            return token.Type switch
+            {
+                TokenType.StringLiteral => true,
+                TokenType.IntegerLiteral => true,
+                TokenType.LongLiteral => true,
+                TokenType.SingleLiteral => true,
+                TokenType.DoubleLiteral => true,
+                TokenType.CharLiteral => true,
+                TokenType.BooleanLiteral => true,
+                TokenType.Identifier => true,
+                TokenType.LeftParen => true,
+                TokenType.New => true,
+                TokenType.Not => true,
+                TokenType.Minus => true,
+                TokenType.AddressOf => true,
+                TokenType.Me => true,
+                TokenType.MyBase => true,
+                TokenType.InterpolatedStringLiteral => true,
+                _ => false
+            };
+        }
+
+        /// <summary>
+        /// Check if current token terminates a statement
+        /// </summary>
+        private bool IsStatementTerminator()
+        {
+            var t = Peek().Type;
+            return t == TokenType.Then || t == TokenType.Else || t == TokenType.ElseIf ||
+                   t == TokenType.EndIf || t == TokenType.EndSub || t == TokenType.EndFunction ||
+                   t == TokenType.EndClass || t == TokenType.EndModule || t == TokenType.EndNamespace ||
+                   t == TokenType.Loop || t == TokenType.Wend || t == TokenType.Next ||
+                   t == TokenType.Case || t == TokenType.EndSelect || t == TokenType.Catch ||
+                   t == TokenType.Finally || t == TokenType.EndTry;
         }
 
         /// <summary>
@@ -2893,6 +3196,17 @@ namespace BasicLang.Compiler
                 var token = Previous();
                 var unary = new UnaryExpressionNode(token.Line, token.Column);
                 unary.Operator = "AddressOf";
+                unary.Operand = ParsePrimary();
+                unary.IsPostfix = false;
+                return unary;
+            }
+
+            // Deref - dereference pointer
+            if (Match(TokenType.Deref))
+            {
+                var token = Previous();
+                var unary = new UnaryExpressionNode(token.Line, token.Column);
+                unary.Operator = "Deref";
                 unary.Operand = ParsePrimary();
                 unary.IsPostfix = false;
                 return unary;

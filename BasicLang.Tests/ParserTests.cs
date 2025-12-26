@@ -128,7 +128,7 @@ End Sub";
         [Fact]
         public void Parse_FunctionWithOptionalParameters_ReturnsCorrectAST()
         {
-            var source = "Function Test(required As Integer, Optional optional As Integer = 10) As Integer\nEnd Function";
+            var source = "Function Test(req As Integer, Optional opt As Integer = 10) As Integer\nEnd Function";
 
             var func = ParseSingle<FunctionNode>(source);
 
@@ -389,7 +389,7 @@ End Sub";
         {
             var source = @"
 Sub Test()
-    Select x
+    Select Case x
         Case 1
             Print(""one"")
         Case 2

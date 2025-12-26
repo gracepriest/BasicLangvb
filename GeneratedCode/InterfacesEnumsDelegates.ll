@@ -109,16 +109,16 @@ entry:
 
 define void @Main() {
 entry:
-  %circle.addr = alloca Circle
-  store Circle zeroinitializer, Circle* %circle.addr
+  %circle.addr = alloca %class.Circle*
+  store %class.Circle* null, %class.Circle** %circle.addr
 
   %t0 = call %class.Circle* @Circle_ctor(double 5)
-  store Circle %t0, Circle* %circle.addr
-  %t1 = load Circle, Circle* %circle.addr
+  store %class.Circle* %t0, %class.Circle** %circle.addr
+  %t1 = load %class.Circle*, %class.Circle** %circle.addr
   %t2 = call double @Circle_GetArea(%class.Circle* %t1)
   %t3 = call i8* @__concat_strings(i8* getelementptr inbounds ([14 x i8], [14 x i8]* @.str.0, i64 0, i64 0), i8* %t2)
   call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.0, i64 0, i64 0), i8* %t3)
-  %t4 = load Circle, Circle* %circle.addr
+  %t4 = load %class.Circle*, %class.Circle** %circle.addr
   %t5 = call double @Circle_GetPerimeter(%class.Circle* %t4)
   %t6 = call i8* @__concat_strings(i8* getelementptr inbounds ([19 x i8], [19 x i8]* @.str.1, i64 0, i64 0), i8* %t5)
   call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.fmt.0, i64 0, i64 0), i8* %t6)

@@ -1,0 +1,10 @@
+# Build results
+bin/
+obj/
+
+# IDE files
+.vs/
+*.user
+
+# Packages
+packages/

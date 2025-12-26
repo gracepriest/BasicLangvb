@@ -103,10 +103,35 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _usings.Add("System.Collections.Generic");
             _usings.Add("System.Threading.Tasks");
             _usings.Add("System.Collections");
+            _usings.Add("System.Runtime.InteropServices");
+            _usings.Add("System.Text");
+            _usings.Add("System.IO");
+            _usings.Add("System.Linq");
+            _usings.Add("System.Net");
+            _usings.Add("System.Net.Http");
+            _usings.Add("System.Net.Sockets");
+            _usings.Add("System.Text.Json");
+            _usings.Add("System.Text.Json.Nodes");
+            _usings.Add("System.Text.RegularExpressions");
+            _usings.Add("System.Security.Cryptography");
+            _usings.Add("System.Diagnostics");
+            _usings.Add("System.Threading");
+
+            // Add .NET usings from the source code
+            foreach (var netUsing in module.NetUsings)
+            {
+                _usings.Add(netUsing.Namespace);
+            }
 
             // Emit using directives
             foreach (var usingDirective in _usings.OrderBy(u => u))
                 WriteLine($"using {usingDirective};");
+
+            // Emit aliased usings separately
+            foreach (var netUsing in module.NetUsings.Where(u => !string.IsNullOrEmpty(u.Alias)))
+            {
+                WriteLine($"using {netUsing.Alias} = {netUsing.Namespace};");
+            }
 
             WriteLine();
 
@@ -208,6 +233,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                             var type = MapType(globalVar.Type);
                             var name = SanitizeName(globalVar.Name);
                             WriteLine($"private static {type} {name};");
+                        }
+                        WriteLine();
+                    }
+
+                    // Extern declarations (P/Invoke)
+                    if (module.ExternDeclarations.Count > 0)
+                    {
+                        WriteLine("// P/Invoke declarations");
+                        foreach (var externDecl in module.ExternDeclarations.Values)
+                        {
+                            GenerateExternDeclaration(externDecl);
                         }
                         WriteLine();
                     }
@@ -1662,8 +1698,22 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var bodyTerminator = bodyBlock.Instructions.LastOrDefault();
             if (bodyTerminator is IRConditionalBranch innerCond)
             {
-                // Nested control flow in loop body
+                // Nested control flow in loop body (if statements or inner loop conditions)
                 HandleConditionalBranch(innerCond);
+            }
+            else if (bodyTerminator is IRBranch innerBranch)
+            {
+                // Nested loop: body branches unconditionally to inner loop's condition block
+                // Don't follow branches to increment or end blocks - those are handled below
+                var target = innerBranch.Target;
+                if (!_processedBlocks.Contains(target) &&
+                    target != incBlock &&
+                    target != endBlock &&
+                    !target.Name.EndsWith(".inc") &&
+                    !target.Name.EndsWith(".end"))
+                {
+                    HandleUnconditionalBranch(innerBranch);
+                }
             }
 
             // Always generate increment if it exists
@@ -1867,6 +1917,19 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                 // If the result is unused, emit as a statement call (for side effects)
                 if (!hasReturn || GetUseCount(call) == 0)
+                    return true;
+
+                // Otherwise, we inline it into expressions (no temp locals)
+                return false;
+            }
+
+            if (instruction is IRInstanceMethodCall methodCall)
+            {
+                // void method calls are statements
+                var hasReturn = methodCall.Type != null && !methodCall.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+                // If the result is unused, emit as a statement call (for side effects)
+                if (!hasReturn || GetUseCount(methodCall) == 0)
                     return true;
 
                 // Otherwise, we inline it into expressions (no temp locals)
@@ -2468,6 +2531,25 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 WriteLine($"// {comment.Text}");
         }
 
+        public void Visit(IRInlineCode inlineCode)
+        {
+            if (inlineCode.Language.ToLower() == "csharp")
+            {
+                // Emit the C# code directly
+                WriteLine("// Inline C# code");
+                foreach (var line in inlineCode.Code.Split('\n'))
+                {
+                    WriteLine(line.TrimEnd());
+                }
+            }
+            else
+            {
+                // For non-C# inline code, emit a comment indicating it's not supported
+                WriteLine($"// WARNING: Inline {inlineCode.Language} code not supported in C# backend");
+                WriteLine($"// Original code ({inlineCode.Code.Length} chars) was skipped");
+            }
+        }
+
         public void Visit(IRArrayAlloc arrayAlloc)
         {
             var elementType = MapType(arrayAlloc.ElementType);
@@ -2579,6 +2661,92 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var type = MapType(tupleElement.Type);
             // Access tuple element using Item1, Item2, etc. (1-based indexing)
             WriteLine($"{type} {varName} = {tuple}.Item{tupleElement.Index + 1};");
+        }
+
+        public void Visit(IRTryCatch tryCatch)
+        {
+            WriteLine("try");
+            WriteLine("{");
+            Indent();
+
+            // Generate try block body
+            _processedBlocks.Add(tryCatch.TryBlock);
+            EmitBlockInstructions(tryCatch.TryBlock);
+
+            // Handle try block's terminator (may have nested control flow)
+            var tryTerminator = tryCatch.TryBlock.Instructions.LastOrDefault();
+            if (tryTerminator is IRConditionalBranch tryCond)
+            {
+                HandleConditionalBranch(tryCond);
+            }
+            else if (tryTerminator is IRBranch tryBranch &&
+                     tryBranch.Target != tryCatch.EndBlock &&
+                     !_processedBlocks.Contains(tryBranch.Target))
+            {
+                HandleUnconditionalBranch(tryBranch);
+            }
+
+            Unindent();
+            WriteLine("}");
+
+            // Generate catch clauses
+            foreach (var catchClause in tryCatch.CatchClauses)
+            {
+                var exType = catchClause.ExceptionType?.Name ?? "Exception";
+                var varName = !string.IsNullOrEmpty(catchClause.VariableName)
+                    ? SanitizeName(catchClause.VariableName)
+                    : "ex";
+
+                WriteLine($"catch ({exType} {varName})");
+                WriteLine("{");
+                Indent();
+
+                _processedBlocks.Add(catchClause.Block);
+                EmitBlockInstructions(catchClause.Block);
+
+                // Handle catch block's terminator
+                var catchTerminator = catchClause.Block.Instructions.LastOrDefault();
+                if (catchTerminator is IRConditionalBranch catchCond)
+                {
+                    HandleConditionalBranch(catchCond);
+                }
+                else if (catchTerminator is IRBranch catchBranch &&
+                         catchBranch.Target != tryCatch.EndBlock &&
+                         !_processedBlocks.Contains(catchBranch.Target))
+                {
+                    HandleUnconditionalBranch(catchBranch);
+                }
+
+                Unindent();
+                WriteLine("}");
+            }
+
+            // Generate finally block if present
+            if (tryCatch.FinallyBlock != null)
+            {
+                WriteLine("finally");
+                WriteLine("{");
+                Indent();
+
+                _processedBlocks.Add(tryCatch.FinallyBlock);
+                EmitBlockInstructions(tryCatch.FinallyBlock);
+
+                Unindent();
+                WriteLine("}");
+            }
+
+            // Continue with end block
+            if (tryCatch.EndBlock != null && !_processedBlocks.Contains(tryCatch.EndBlock))
+            {
+                _processedBlocks.Add(tryCatch.EndBlock);
+                EmitBlockInstructions(tryCatch.EndBlock);
+
+                var endTerminator = tryCatch.EndBlock.Instructions.LastOrDefault();
+                if (endTerminator is IRConditionalBranch endCond)
+                    HandleConditionalBranch(endCond);
+                else if (endTerminator is IRBranch endBranch)
+                    HandleUnconditionalBranch(endBranch);
+            }
         }
 
         // ====================================================================
@@ -2724,6 +2892,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 _ when type.Kind == TypeKind.Pointer => "default",
                 _ when type.Kind == TypeKind.TypeParameter => "default!",  // Generic type parameter T
                 _ when type.Kind == TypeKind.Structure => "default",       // Value types
+                _ when type.Kind == TypeKind.Union => "default",           // Union types (all members share same memory)
                 _ when type.Kind == TypeKind.Class => "default!",          // Reference types
                 _ => "default!"  // Use default for unknown types (safe for both value and reference types)
             };
@@ -2826,6 +2995,75 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (ch == '\r') return "\\r";
             if (ch == '\t') return "\\t";
             return ch.ToString();
+        }
+
+        /// <summary>
+        /// Generate P/Invoke declaration for C library interop
+        /// </summary>
+        private void GenerateExternDeclaration(IRExternDeclaration externDecl)
+        {
+            // Skip if this is a platform-specific extern (not a C library interop)
+            if (string.IsNullOrEmpty(externDecl.LibraryName) && externDecl.PlatformImplementations.Count > 0)
+            {
+                // This is a platform-specific extern, handle differently
+                if (externDecl.PlatformImplementations.TryGetValue("CSharp", out var impl))
+                {
+                    // Emit the raw C# implementation
+                    WriteLine(impl);
+                }
+                return;
+            }
+
+            // Build the DllImport attribute
+            var dllImportParts = new List<string>();
+            dllImportParts.Add($"\"{externDecl.LibraryName}\"");
+
+            // Add entry point if alias is specified
+            if (!string.IsNullOrEmpty(externDecl.AliasName))
+            {
+                dllImportParts.Add($"EntryPoint = \"{externDecl.AliasName}\"");
+            }
+
+            // Add calling convention
+            if (!string.IsNullOrEmpty(externDecl.CallingConvention) && externDecl.CallingConvention != "Default")
+            {
+                var ccName = externDecl.CallingConvention switch
+                {
+                    "CDecl" => "CallingConvention.Cdecl",
+                    "StdCall" => "CallingConvention.StdCall",
+                    "FastCall" => "CallingConvention.FastCall",
+                    "ThisCall" => "CallingConvention.ThisCall",
+                    _ => "CallingConvention.Winapi"
+                };
+                dllImportParts.Add($"CallingConvention = {ccName}");
+            }
+
+            WriteLine($"[DllImport({string.Join(", ", dllImportParts)})]");
+
+            // Build the method signature
+            var returnType = externDecl.IsFunction
+                ? MapType(externDecl.ReturnType)
+                : "void";
+
+            var paramList = new List<string>();
+            foreach (var param in externDecl.Parameters)
+            {
+                var paramType = MapType(param.Type);
+                var paramName = SanitizeName(param.Name);
+
+                // Handle ByRef parameters
+                if (param.IsByRef)
+                {
+                    paramList.Add($"ref {paramType} {paramName}");
+                }
+                else
+                {
+                    paramList.Add($"{paramType} {paramName}");
+                }
+            }
+
+            var methodName = SanitizeName(externDecl.Name);
+            WriteLine($"public static extern {returnType} {methodName}({string.Join(", ", paramList)});");
         }
 
         private void Write(string text) => _output.Append(text);

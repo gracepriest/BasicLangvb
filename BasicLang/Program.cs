@@ -12,6 +12,7 @@ using BasicLang.Compiler.CodeGen.MSIL;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.IR.Optimization;
 using BasicLang.Compiler.LSP;
+using BasicLang.Compiler.ProjectSystem;
 using BasicLang.Compiler.Repl;
 using BasicLang.Compiler.SemanticAnalysis;
 using BasicLang.Compiler.StdLib;
@@ -57,6 +58,48 @@ namespace BasicLang.Compiler.Driver
                 return;
             }
 
+            // Handle subcommands
+            if (args.Length > 0)
+            {
+                var command = args[0].ToLowerInvariant();
+                var subArgs = args.Skip(1).ToArray();
+
+                switch (command)
+                {
+                    case "new":
+                        HandleNewCommand(subArgs);
+                        return;
+
+                    case "restore":
+                        await HandleRestoreCommand(subArgs);
+                        return;
+
+                    case "add":
+                        await HandleAddCommand(subArgs);
+                        return;
+
+                    case "remove":
+                        HandleRemoveCommand(subArgs);
+                        return;
+
+                    case "build":
+                        await HandleBuildCommand(subArgs);
+                        return;
+
+                    case "run":
+                        await HandleRunCommand(subArgs);
+                        return;
+
+                    case "list":
+                        HandleListCommand(subArgs);
+                        return;
+
+                    case "search":
+                        await HandleSearchCommand(subArgs);
+                        return;
+                }
+            }
+
             // Check for parser tests
             if (args.Contains("--parser-tests"))
             {
@@ -66,11 +109,18 @@ namespace BasicLang.Compiler.Driver
 
             // Check for file argument (compile a file)
             var fileArg = args.FirstOrDefault(a => !a.StartsWith("-") &&
-                (a.EndsWith(".bas") || a.EndsWith(".bl") || a.EndsWith(".basic")));
+                (a.EndsWith(".bas") || a.EndsWith(".bl") || a.EndsWith(".basic") || a.EndsWith(".blproj")));
 
             if (fileArg != null)
             {
-                CompileFile(fileArg, args);
+                if (fileArg.EndsWith(".blproj"))
+                {
+                    await HandleBuildCommand(new[] { fileArg });
+                }
+                else
+                {
+                    CompileFile(fileArg, args);
+                }
                 return;
             }
 
@@ -118,7 +168,17 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("BasicLang Compiler");
             Console.WriteLine("==================");
             Console.WriteLine();
-            Console.WriteLine("Usage: basiclang [options] [source.bas]");
+            Console.WriteLine("Usage: basiclang [command] [options]");
+            Console.WriteLine();
+            Console.WriteLine("Commands:");
+            Console.WriteLine("  new <template>    Create a new project from a template");
+            Console.WriteLine("  build             Build a project");
+            Console.WriteLine("  run               Build and run a project");
+            Console.WriteLine("  restore           Restore NuGet packages");
+            Console.WriteLine("  add package <id>  Add a NuGet package to the project");
+            Console.WriteLine("  remove package    Remove a NuGet package");
+            Console.WriteLine("  list packages     List installed packages");
+            Console.WriteLine("  search <query>    Search for NuGet packages");
             Console.WriteLine();
             Console.WriteLine("Options:");
             Console.WriteLine("  --repl, -i        Start interactive REPL");
@@ -131,11 +191,484 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("  --search-path=DIR Add module search path");
             Console.WriteLine();
             Console.WriteLine("Examples:");
+            Console.WriteLine("  basiclang new console -n MyApp         Create new console app");
+            Console.WriteLine("  basiclang build                        Build current project");
+            Console.WriteLine("  basiclang run                          Build and run project");
+            Console.WriteLine("  basiclang add package Newtonsoft.Json  Add a package");
+            Console.WriteLine("  basiclang restore                      Restore all packages");
             Console.WriteLine("  basiclang --repl                       Start interactive mode");
-            Console.WriteLine("  basiclang --lsp                        Start LSP server for IDE");
-            Console.WriteLine("  basiclang program.bas                  Compile program.bas");
-            Console.WriteLine("  basiclang --target=cpp program.bas     Compile to C++");
-            Console.WriteLine("  basiclang --optimize program.bas       Compile with optimizations");
+            Console.WriteLine("  basiclang program.bas                  Compile a source file");
+        }
+
+        // ====================================================================
+        // Command Handlers
+        // ====================================================================
+
+        static void HandleNewCommand(string[] args)
+        {
+            var templateEngine = new TemplateEngine();
+
+            if (args.Length == 0 || args.Contains("--list") || args.Contains("-l"))
+            {
+                templateEngine.ListTemplates();
+                return;
+            }
+
+            var templateName = args[0];
+            string projectName = null;
+            string outputPath = null;
+
+            for (int i = 1; i < args.Length; i++)
+            {
+                if ((args[i] == "-n" || args[i] == "--name") && i + 1 < args.Length)
+                {
+                    projectName = args[++i];
+                }
+                else if ((args[i] == "-o" || args[i] == "--output") && i + 1 < args.Length)
+                {
+                    outputPath = args[++i];
+                }
+            }
+
+            templateEngine.CreateProject(templateName, projectName, outputPath);
+        }
+
+        static async Task HandleRestoreCommand(string[] args)
+        {
+            var projectPath = FindProjectFile(args.FirstOrDefault(a => !a.StartsWith("-")));
+            if (projectPath == null)
+            {
+                Console.WriteLine("No project file found. Use 'basiclang new' to create a project.");
+                return;
+            }
+
+            var project = ProjectFile.Load(projectPath);
+            var packageManager = new PackageManager();
+            await packageManager.RestoreAsync(project);
+        }
+
+        static async Task HandleAddCommand(string[] args)
+        {
+            if (args.Length == 0)
+            {
+                Console.WriteLine("Usage: basiclang add package <package-id> [--version <version>]");
+                return;
+            }
+
+            if (args[0].ToLowerInvariant() == "package")
+            {
+                if (args.Length < 2)
+                {
+                    Console.WriteLine("Usage: basiclang add package <package-id> [--version <version>]");
+                    return;
+                }
+
+                var packageId = args[1];
+                string version = null;
+
+                for (int i = 2; i < args.Length; i++)
+                {
+                    if ((args[i] == "-v" || args[i] == "--version") && i + 1 < args.Length)
+                    {
+                        version = args[++i];
+                    }
+                }
+
+                var projectPath = FindProjectFile(null);
+                if (projectPath == null)
+                {
+                    Console.WriteLine("No project file found.");
+                    return;
+                }
+
+                var project = ProjectFile.Load(projectPath);
+                var packageManager = new PackageManager();
+                await packageManager.AddPackageAsync(project, packageId, version);
+            }
+            else
+            {
+                Console.WriteLine($"Unknown add target: {args[0]}");
+                Console.WriteLine("Available: package");
+            }
+        }
+
+        static void HandleRemoveCommand(string[] args)
+        {
+            if (args.Length == 0)
+            {
+                Console.WriteLine("Usage: basiclang remove package <package-id>");
+                return;
+            }
+
+            if (args[0].ToLowerInvariant() == "package")
+            {
+                if (args.Length < 2)
+                {
+                    Console.WriteLine("Usage: basiclang remove package <package-id>");
+                    return;
+                }
+
+                var packageId = args[1];
+                var projectPath = FindProjectFile(null);
+                if (projectPath == null)
+                {
+                    Console.WriteLine("No project file found.");
+                    return;
+                }
+
+                var project = ProjectFile.Load(projectPath);
+                var packageManager = new PackageManager();
+                packageManager.RemovePackage(project, packageId);
+            }
+        }
+
+        static async Task HandleBuildCommand(string[] args)
+        {
+            var projectPath = FindProjectFile(args.FirstOrDefault(a => !a.StartsWith("-")));
+            if (projectPath == null)
+            {
+                Console.WriteLine("No project file found.");
+                return;
+            }
+
+            Console.WriteLine($"Building {Path.GetFileName(projectPath)}...");
+
+            var project = ProjectFile.Load(projectPath);
+
+            // Restore packages first
+            var packageManager = new PackageManager();
+            var restoreResult = await packageManager.RestoreAsync(project);
+
+            if (!restoreResult.Success)
+            {
+                Console.WriteLine("Package restore failed. Fix errors and try again.");
+                return;
+            }
+
+            // Get configuration
+            var configuration = "Debug";
+            for (int i = 0; i < args.Length; i++)
+            {
+                if ((args[i] == "-c" || args[i] == "--configuration") && i + 1 < args.Length)
+                {
+                    configuration = args[++i];
+                }
+            }
+
+            // Compile each source file
+            var projectDir = Path.GetDirectoryName(projectPath) ?? ".";
+            var outputDir = Path.Combine(projectDir, "bin", configuration, project.TargetFramework);
+            Directory.CreateDirectory(outputDir);
+
+            var sourceFiles = project.GetSourceFiles().ToList();
+            if (sourceFiles.Count == 0)
+            {
+                Console.WriteLine("No source files found.");
+                return;
+            }
+
+            var options = new BasicLang.Compiler.CompilerOptions
+            {
+                TargetBackend = project.Backend.ToLowerInvariant(),
+                OutputPath = outputDir,
+                OptimizeAggressive = project.Configurations.TryGetValue(configuration, out var config) && config.OptimizationsEnabled
+            };
+
+            // Add package assemblies to search paths
+            foreach (var assembly in restoreResult.ResolvedAssemblies)
+            {
+                var dir = Path.GetDirectoryName(assembly);
+                if (!string.IsNullOrEmpty(dir) && !options.SearchPaths.Contains(dir))
+                {
+                    options.SearchPaths.Add(dir);
+                }
+            }
+
+            var compiler = new BasicCompiler(options);
+            var success = true;
+            IR.IRModule combinedIR = null;
+
+            foreach (var sourceFile in sourceFiles)
+            {
+                Console.WriteLine($"  Compiling {Path.GetFileName(sourceFile)}...");
+                var result = compiler.CompileFile(sourceFile);
+                if (!result.Success)
+                {
+                    success = false;
+                    foreach (var error in result.AllErrors)
+                    {
+                        Console.WriteLine($"    Error: {error.Message}");
+                    }
+                }
+                else if (result.CombinedIR != null)
+                {
+                    combinedIR = result.CombinedIR;
+                }
+            }
+
+            if (success && combinedIR != null)
+            {
+                // Generate output code
+                Console.WriteLine("  Generating output...");
+
+                var outputFileName = project.AssemblyName ?? project.ProjectName ?? "Program";
+                var backend = project.Backend?.ToLowerInvariant() ?? "csharp";
+
+                string generatedCode;
+                string extension;
+
+                switch (backend)
+                {
+                    case "cpp":
+                    case "c++":
+                        var cppGen = new CodeGen.CPlusPlus.CppCodeGenerator();
+                        generatedCode = cppGen.Generate(combinedIR);
+                        extension = ".cpp";
+                        break;
+                    case "llvm":
+                        var llvmGen = new CodeGen.LLVM.LLVMCodeGenerator();
+                        generatedCode = llvmGen.Generate(combinedIR);
+                        extension = ".ll";
+                        break;
+                    case "msil":
+                        var msilGen = new CodeGen.MSIL.MSILCodeGenerator();
+                        generatedCode = msilGen.Generate(combinedIR);
+                        extension = ".il";
+                        break;
+                    default: // csharp
+                        var csGen = new CodeGen.CSharp.CSharpCodeGenerator();
+                        generatedCode = csGen.Generate(combinedIR);
+                        extension = ".cs";
+                        break;
+                }
+
+                var outputPath = Path.Combine(outputDir, outputFileName + extension);
+                File.WriteAllText(outputPath, generatedCode);
+
+                // For C# backend, compile to .dll
+                if (backend == "csharp" || backend == "cs")
+                {
+                    Console.WriteLine("  Compiling to .NET assembly...");
+
+                    // Generate a temporary .csproj
+                    var csprojPath = Path.Combine(outputDir, outputFileName + ".csproj");
+                    var csFileName = outputFileName + ".cs";
+                    var csprojContent = $@"<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <OutputType>{(project.OutputType == "Library" ? "Library" : "Exe")}</OutputType>
+    <TargetFramework>{project.TargetFramework}</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>{outputFileName}</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include=""{csFileName}"" />
+  </ItemGroup>
+</Project>";
+                    File.WriteAllText(csprojPath, csprojContent);
+
+                    // Run dotnet build
+                    var buildProcess = new System.Diagnostics.Process
+                    {
+                        StartInfo = new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = "dotnet",
+                            Arguments = $"build \"{csprojPath}\" -c {configuration} -o \"{outputDir}\" --nologo -v q",
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            WorkingDirectory = outputDir
+                        }
+                    };
+
+                    buildProcess.Start();
+                    var buildOutput = await buildProcess.StandardOutput.ReadToEndAsync();
+                    var buildErrors = await buildProcess.StandardError.ReadToEndAsync();
+                    await buildProcess.WaitForExitAsync();
+
+                    if (buildProcess.ExitCode != 0)
+                    {
+                        Console.WriteLine("  .NET compilation failed:");
+                        if (!string.IsNullOrWhiteSpace(buildOutput))
+                            Console.WriteLine(buildOutput);
+                        if (!string.IsNullOrWhiteSpace(buildErrors))
+                            Console.WriteLine(buildErrors);
+                    }
+                }
+
+                Console.WriteLine();
+                Console.WriteLine($"Build succeeded. Output: {outputPath}");
+            }
+            else if (!success)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Build failed.");
+            }
+            else
+            {
+                Console.WriteLine();
+                Console.WriteLine("Build completed but no output generated.");
+            }
+        }
+
+        static async Task HandleRunCommand(string[] args)
+        {
+            // First build
+            await HandleBuildCommand(args);
+
+            // Then run
+            var projectPath = FindProjectFile(args.FirstOrDefault(a => !a.StartsWith("-")));
+            if (projectPath == null)
+                return;
+
+            var project = ProjectFile.Load(projectPath);
+            var projectDir = Path.GetDirectoryName(projectPath) ?? ".";
+            var configuration = "Debug";
+            var outputDir = Path.Combine(projectDir, "bin", configuration, project.TargetFramework);
+
+            // Find the output executable
+            var exeName = project.AssemblyName ?? project.ProjectName;
+
+            // Check multiple possible locations for the dll
+            var possiblePaths = new[]
+            {
+                Path.Combine(outputDir, $"{exeName}.dll"),
+                Path.Combine(outputDir, "bin", configuration, project.TargetFramework, $"{exeName}.dll"),
+            };
+
+            var exePath = possiblePaths.FirstOrDefault(File.Exists);
+
+            if (exePath != null)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"Running {exeName}...");
+                Console.WriteLine(new string('-', 40));
+
+                var process = new System.Diagnostics.Process
+                {
+                    StartInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "dotnet",
+                        Arguments = $"\"{exePath}\"",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    }
+                };
+
+                process.Start();
+                Console.WriteLine(await process.StandardOutput.ReadToEndAsync());
+                var errors = await process.StandardError.ReadToEndAsync();
+                if (!string.IsNullOrEmpty(errors))
+                {
+                    Console.Error.WriteLine(errors);
+                }
+                await process.WaitForExitAsync();
+            }
+            else
+            {
+                Console.WriteLine($"Output not found. Searched:");
+                foreach (var p in possiblePaths)
+                    Console.WriteLine($"  - {p}");
+            }
+        }
+
+        static void HandleListCommand(string[] args)
+        {
+            if (args.Length == 0 || args[0].ToLowerInvariant() == "packages")
+            {
+                var projectPath = FindProjectFile(null);
+                if (projectPath == null)
+                {
+                    Console.WriteLine("No project file found.");
+                    return;
+                }
+
+                var project = ProjectFile.Load(projectPath);
+                var packageManager = new PackageManager();
+                packageManager.ListPackages(project);
+            }
+            else if (args[0].ToLowerInvariant() == "templates")
+            {
+                var templateEngine = new TemplateEngine();
+                templateEngine.ListTemplates();
+            }
+            else
+            {
+                Console.WriteLine($"Unknown list target: {args[0]}");
+                Console.WriteLine("Available: packages, templates");
+            }
+        }
+
+        static async Task HandleSearchCommand(string[] args)
+        {
+            if (args.Length == 0)
+            {
+                Console.WriteLine("Usage: basiclang search <query>");
+                return;
+            }
+
+            var query = string.Join(" ", args);
+            var packageManager = new PackageManager();
+            var results = await packageManager.SearchAsync(query);
+
+            if (results.Count == 0)
+            {
+                Console.WriteLine("No packages found.");
+                return;
+            }
+
+            Console.WriteLine($"Found {results.Count} packages:");
+            Console.WriteLine();
+
+            foreach (var pkg in results)
+            {
+                Console.WriteLine($"  {pkg.Id} ({pkg.Version})");
+                if (!string.IsNullOrEmpty(pkg.Description))
+                {
+                    var desc = pkg.Description.Length > 70
+                        ? pkg.Description.Substring(0, 67) + "..."
+                        : pkg.Description;
+                    Console.WriteLine($"    {desc}");
+                }
+                Console.WriteLine($"    Downloads: {pkg.TotalDownloads:N0}");
+                Console.WriteLine();
+            }
+        }
+
+        static string FindProjectFile(string explicitPath)
+        {
+            if (!string.IsNullOrEmpty(explicitPath))
+            {
+                if (File.Exists(explicitPath))
+                    return explicitPath;
+                if (Directory.Exists(explicitPath))
+                {
+                    var projInDir = Directory.GetFiles(explicitPath, "*.blproj").FirstOrDefault();
+                    if (projInDir != null)
+                        return projInDir;
+                }
+            }
+
+            // Search current directory
+            var currentDir = Directory.GetCurrentDirectory();
+            var projectFiles = Directory.GetFiles(currentDir, "*.blproj");
+
+            if (projectFiles.Length == 1)
+                return projectFiles[0];
+
+            if (projectFiles.Length > 1)
+            {
+                Console.WriteLine("Multiple project files found. Please specify one:");
+                foreach (var pf in projectFiles)
+                {
+                    Console.WriteLine($"  {Path.GetFileName(pf)}");
+                }
+                return null;
+            }
+
+            return null;
         }
 
         /// <summary>

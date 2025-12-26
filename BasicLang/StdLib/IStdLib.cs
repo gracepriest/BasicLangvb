@@ -16,7 +16,14 @@ namespace BasicLang.Compiler.StdLib
         Conversion,
         DateTime,
         System,
-        Collections
+        Collections,
+        Networking,
+        Json,
+        Regex,
+        Environment,
+        Console,
+        Process,
+        Crypto
     }
 
     /// <summary>
@@ -222,5 +229,125 @@ namespace BasicLang.Compiler.StdLib
         string EmitSetIntersect(string set1, string set2);
         string EmitSetExcept(string set1, string set2);
         string EmitSetToArray(string set);
+    }
+
+    /// <summary>
+    /// TCP/UDP Networking functions
+    /// </summary>
+    public interface IStdNetworking
+    {
+        // TCP Client
+        string EmitTcpConnect(string host, string port);
+        string EmitTcpSend(string socket, string data);
+        string EmitTcpReceive(string socket, string bufferSize);
+        string EmitTcpReceiveLine(string socket);
+        string EmitTcpClose(string socket);
+        string EmitTcpIsConnected(string socket);
+
+        // TCP Server
+        string EmitTcpListen(string port);
+        string EmitTcpAccept(string listener);
+        string EmitTcpStopListener(string listener);
+
+        // UDP
+        string EmitUdpCreate();
+        string EmitUdpBind(string socket, string port);
+        string EmitUdpSend(string socket, string host, string port, string data);
+        string EmitUdpReceive(string socket, string bufferSize);
+        string EmitUdpClose(string socket);
+
+        // HTTP Client (simple)
+        string EmitHttpGet(string url);
+        string EmitHttpPost(string url, string data, string contentType);
+        string EmitHttpDownload(string url, string filePath);
+    }
+
+    /// <summary>
+    /// JSON functions
+    /// </summary>
+    public interface IStdJson
+    {
+        string EmitJsonParse(string jsonString);
+        string EmitJsonStringify(string obj);
+        string EmitJsonGet(string json, string path);
+        string EmitJsonSet(string json, string path, string value);
+        string EmitJsonIsValid(string jsonString);
+    }
+
+    /// <summary>
+    /// Regular expression functions
+    /// </summary>
+    public interface IStdRegex
+    {
+        string EmitRegexMatch(string input, string pattern);
+        string EmitRegexMatches(string input, string pattern);
+        string EmitRegexReplace(string input, string pattern, string replacement);
+        string EmitRegexSplit(string input, string pattern);
+        string EmitIsMatch(string input, string pattern);
+    }
+
+    /// <summary>
+    /// Environment and system functions
+    /// </summary>
+    public interface IStdEnvironment
+    {
+        string EmitGetEnv(string name);
+        string EmitSetEnv(string name, string value);
+        string EmitGetArgs();
+        string EmitGetExePath();
+        string EmitGetMachineName();
+        string EmitGetUserName();
+        string EmitGetOSVersion();
+        string EmitGetTempPath();
+        string EmitExit(string code);
+    }
+
+    /// <summary>
+    /// Console functions
+    /// </summary>
+    public interface IStdConsole
+    {
+        string EmitClear();
+        string EmitSetForeColor(string color);
+        string EmitSetBackColor(string color);
+        string EmitResetColor();
+        string EmitSetCursorPos(string x, string y);
+        string EmitGetCursorX();
+        string EmitGetCursorY();
+        string EmitBeep();
+        string EmitReadKey();
+        string EmitKeyAvailable();
+        string EmitSetTitle(string title);
+        string EmitGetWindowWidth();
+        string EmitGetWindowHeight();
+    }
+
+    /// <summary>
+    /// Process/Shell functions
+    /// </summary>
+    public interface IStdProcess
+    {
+        string EmitShell(string command);
+        string EmitShellAsync(string command);
+        string EmitRun(string exePath, string arguments);
+        string EmitRunHidden(string exePath, string arguments);
+        string EmitKillProcess(string processId);
+        string EmitGetProcessId();
+        string EmitGetProcesses();
+        string EmitSleep(string milliseconds);
+    }
+
+    /// <summary>
+    /// Cryptography functions
+    /// </summary>
+    public interface IStdCrypto
+    {
+        string EmitMD5(string data);
+        string EmitSHA1(string data);
+        string EmitSHA256(string data);
+        string EmitBase64Encode(string data);
+        string EmitBase64Decode(string data);
+        string EmitRandomBytes(string count);
+        string EmitGuid();
     }
 }

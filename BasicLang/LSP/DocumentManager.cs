@@ -20,11 +20,65 @@ namespace BasicLang.Compiler.LSP
         private readonly int _maxCacheEntries;
         private readonly object _cacheLock = new object();
 
+        /// <summary>
+        /// Shared TypeRegistry for .NET assembly loading
+        /// </summary>
+        public TypeRegistry TypeRegistry { get; private set; }
+
         public DocumentManager(int maxCacheEntries = 100)
         {
             _documents = new ConcurrentDictionary<DocumentUri, DocumentState>();
             _parseCache = new ConcurrentDictionary<string, CachedParseResult>();
             _maxCacheEntries = maxCacheEntries;
+
+            // Initialize TypeRegistry with auto-detected .NET SDK path
+            InitializeTypeRegistry();
+        }
+
+        /// <summary>
+        /// Initialize the TypeRegistry with assembly search paths
+        /// </summary>
+        private void InitializeTypeRegistry()
+        {
+            TypeRegistry = new TypeRegistry();
+
+            // Try to load cached index first
+            if (!TypeRegistry.LoadIndexFromCache())
+            {
+                // Auto-detect .NET SDK reference assemblies
+                var sdkPath = TypeRegistry.DetectDotNetSdkPath();
+                if (!string.IsNullOrEmpty(sdkPath))
+                {
+                    TypeRegistry.AddSearchPath(sdkPath);
+                }
+
+                // Build the index (runs in background for large assembly sets)
+                try
+                {
+                    TypeRegistry.BuildIndex();
+                }
+                catch
+                {
+                    // Ignore index build failures
+                }
+            }
+        }
+
+        /// <summary>
+        /// Add additional assembly search paths (e.g., user-defined libraries)
+        /// </summary>
+        public void AddAssemblySearchPath(string path)
+        {
+            TypeRegistry?.AddSearchPath(path);
+            // Rebuild index to include new path
+            try
+            {
+                TypeRegistry?.BuildIndex();
+            }
+            catch
+            {
+                // Ignore rebuild failures
+            }
         }
 
         /// <summary>
@@ -44,6 +98,7 @@ namespace BasicLang.Compiler.LSP
 
             // Create new state and try to use cached parse results
             var state = new DocumentState(uri, content);
+            state.TypeRegistry = TypeRegistry; // Share TypeRegistry across documents
             var contentHash = state.ContentHash;
 
             // Check parse cache
@@ -181,6 +236,16 @@ namespace BasicLang.Compiler.LSP
         public bool FromCache { get; private set; }
         public DateTime ParsedAt { get; private set; }
 
+        /// <summary>
+        /// TypeRegistry for .NET assembly loading (shared across documents)
+        /// </summary>
+        public TypeRegistry TypeRegistry { get; set; }
+
+        /// <summary>
+        /// Alias for Content property (for CompletionService compatibility)
+        /// </summary>
+        public string SourceCode => Content;
+
         public DocumentState(DocumentUri uri, string content)
         {
             Uri = uri;
@@ -273,6 +338,13 @@ namespace BasicLang.Compiler.LSP
             try
             {
                 SemanticAnalyzer = new SemanticAnalyzer();
+
+                // Configure TypeRegistry for .NET IntelliSense
+                if (TypeRegistry != null)
+                {
+                    SemanticAnalyzer.ConfigureTypeRegistry(TypeRegistry);
+                }
+
                 SemanticSuccessful = SemanticAnalyzer.Analyze(AST);
 
                 // Collect semantic errors

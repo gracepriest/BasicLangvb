@@ -62,5 +62,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         public void Visit(IRFieldAccess fieldAccess) => _generator.Visit(fieldAccess);
         public void Visit(IRFieldStore fieldStore) => _generator.Visit(fieldStore);
         public void Visit(IRTupleElement tupleElement) => _generator.Visit(tupleElement);
+        public void Visit(IRTryCatch tryCatch) => _generator.Visit(tryCatch);
+        public void Visit(IRInlineCode inlineCode) => _generator.Visit(inlineCode);
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
 namespace GeneratedCode
@@ -58,7 +59,7 @@ namespace GeneratedCode
     {
         public static void Main()
         {
-            Circle circle = null;
+            Circle circle = default!;
 
             circle = new Circle(5);
             Console.WriteLine("Circle area: " + circle.GetArea());

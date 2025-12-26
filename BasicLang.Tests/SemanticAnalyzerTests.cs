@@ -197,8 +197,8 @@ End Sub";
         public void Analyze_FunctionWithOptionalParameters_Succeeds()
         {
             var source = @"
-Function Test(required As Integer, Optional optional As Integer = 10) As Integer
-    Return required + optional
+Function Test(req As Integer, Optional opt As Integer = 10) As Integer
+    Return req + opt
 End Function
 
 Sub Main()

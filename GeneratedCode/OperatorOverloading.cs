@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
 namespace GeneratedCode
@@ -9,8 +10,8 @@ namespace GeneratedCode
     {
         public static void Main()
         {
-            Vector2D v1 = null;
-            Vector2D v2 = null;
+            Vector2D v1 = default!;
+            Vector2D v2 = default!;
 
             v1 = new Vector2D(3, 4);
             v2 = new Vector2D(1, 2);

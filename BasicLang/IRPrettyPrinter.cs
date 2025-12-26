@@ -270,6 +270,21 @@ namespace BasicLang.Compiler.IR
         {
             WriteLine(tupleElement.ToString());
         }
+
+        public void Visit(IRTryCatch tryCatch)
+        {
+            WriteLine(tryCatch.ToString());
+        }
+
+        public void Visit(IRInlineCode inlineCode)
+        {
+            WriteLine($"inline {inlineCode.Language} {{");
+            foreach (var line in inlineCode.Code.Split('\n'))
+            {
+                WriteLine($"    {line.TrimEnd()}");
+            }
+            WriteLine("}");
+        }
     }
 
     /// <summary>

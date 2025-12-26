@@ -303,10 +303,14 @@ namespace BasicLang.Tests
         // ====================================================================
 
         [Theory]
-        [InlineData("#if", TokenType.HashIf)]
-        [InlineData("#else", TokenType.HashElse)]
-        [InlineData("#elseif", TokenType.HashElseIf)]
-        [InlineData("#endif", TokenType.HashEndIf)]
+        [InlineData("#if", TokenType.PreprocessorIf)]
+        [InlineData("#else", TokenType.PreprocessorElse)]
+        [InlineData("#elseif", TokenType.PreprocessorElseIf)]
+        [InlineData("#endif", TokenType.PreprocessorEndIf)]
+        [InlineData("#define", TokenType.PreprocessorDefine)]
+        [InlineData("#include", TokenType.PreprocessorInclude)]
+        [InlineData("#const", TokenType.PreprocessorConst)]
+        [InlineData("#region", TokenType.PreprocessorRegion)]
         public void Tokenize_Directive_ReturnsCorrectToken(string directive, TokenType expectedType)
         {
             var token = GetToken(directive);

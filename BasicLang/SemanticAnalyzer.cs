@@ -24,6 +24,40 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private ModuleResolver _moduleResolver;
         private CompilationUnit _currentUnit;
 
+        // .NET namespace tracking
+        private readonly HashSet<string> _netNamespaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Type registry for .NET assemblies (lazy loading)
+        private TypeRegistry _typeRegistry;
+
+        /// <summary>
+        /// Get the TypeRegistry for .NET type lookups
+        /// </summary>
+        public TypeRegistry TypeRegistry => _typeRegistry;
+
+        // Common .NET types that should be recognized
+        private static readonly HashSet<string> CommonNetTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            // System types
+            "Console", "Math", "Environment", "DateTime", "TimeSpan", "Guid", "Random",
+            "Convert", "BitConverter", "Buffer", "Array", "Enum", "Type", "Activator",
+            // System.Text
+            "StringBuilder", "Encoding", "UTF8Encoding", "ASCIIEncoding",
+            // System.Collections.Generic
+            "List", "Dictionary", "HashSet", "Queue", "Stack", "LinkedList",
+            "SortedList", "SortedDictionary", "SortedSet",
+            // System.IO
+            "File", "Directory", "Path", "Stream", "FileStream", "MemoryStream",
+            "StreamReader", "StreamWriter", "BinaryReader", "BinaryWriter",
+            "TextReader", "TextWriter", "StringReader", "StringWriter",
+            // System.Threading
+            "Thread", "Task", "Mutex", "Semaphore", "Monitor",
+            // System.Net
+            "WebClient", "HttpClient", "WebRequest", "WebResponse",
+            // System.Linq
+            "Enumerable", "Queryable"
+        };
+
         public List<SemanticError> Errors => _errors;
         public Scope GlobalScope { get; private set; }
         public ErrorContext ErrorContext => _errorContext;
@@ -52,6 +86,44 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// Get the current compilation unit
         /// </summary>
         public CompilationUnit CurrentUnit => _currentUnit;
+
+        /// <summary>
+        /// Configure the type registry for .NET assembly loading
+        /// </summary>
+        public void ConfigureTypeRegistry(TypeRegistry registry)
+        {
+            _typeRegistry = registry;
+        }
+
+        /// <summary>
+        /// Get all loaded .NET types for IntelliSense
+        /// </summary>
+        public IEnumerable<NetTypeInfo> GetLoadedNetTypes()
+        {
+            if (_typeRegistry == null)
+                return Enumerable.Empty<NetTypeInfo>();
+
+            return _typeRegistry.GetAllLoadedTypes();
+        }
+
+        /// <summary>
+        /// Get members of a .NET type for IntelliSense
+        /// </summary>
+        public IEnumerable<NetMemberInfo> GetNetTypeMembers(string typeName)
+        {
+            if (_typeRegistry == null)
+                return Enumerable.Empty<NetMemberInfo>();
+
+            return _typeRegistry.GetTypeMembers(typeName);
+        }
+
+        /// <summary>
+        /// Get .NET type info by name
+        /// </summary>
+        public NetTypeInfo GetNetType(string typeName)
+        {
+            return _typeRegistry?.GetType(typeName);
+        }
 
         public bool Analyze(ProgramNode program)
         {
@@ -224,6 +296,270 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             RegisterStdLibFunction("Val", SymbolKind.Function, _typeManager.GetType("Double"),
                 new[] { ("str", _typeManager.GetType("String")) });
+
+            // File I/O Functions
+            RegisterStdLibFunction("FileOpen", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("filename", _typeManager.GetType("String")), ("mode", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("FileClose", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("handle", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("FileRead", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("handle", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("FileReadLine", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("handle", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("FileReadAll", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("handle", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("FileWrite", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("handle", _typeManager.GetType("Integer")), ("data", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("FileWriteLine", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("handle", _typeManager.GetType("Integer")), ("data", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("FileExists", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("filename", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("FileDelete", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("filename", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("FileCopy", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("source", _typeManager.GetType("String")), ("dest", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("FileEof", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("handle", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("FileSeek", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("handle", _typeManager.GetType("Integer")), ("position", _typeManager.GetType("Long")) });
+
+            RegisterStdLibFunction("FileTell", SymbolKind.Function, _typeManager.GetType("Long"),
+                new[] { ("handle", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("FileLen", SymbolKind.Function, _typeManager.GetType("Long"),
+                new[] { ("filename", _typeManager.GetType("String")) });
+
+            // Directory Functions
+            RegisterStdLibFunction("DirExists", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("path", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("DirCreate", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("path", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("DirDelete", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("path", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("GetCurrentDir", SymbolKind.Function, _typeManager.GetType("String"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("SetCurrentDir", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("path", _typeManager.GetType("String")) });
+
+            // Networking - TCP Client
+            RegisterStdLibFunction("TcpConnect", SymbolKind.Function, _typeManager.GetType("Object"),
+                new[] { ("host", _typeManager.GetType("String")), ("port", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("TcpSend", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("socket", _typeManager.GetType("Object")), ("data", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("TcpReceive", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("socket", _typeManager.GetType("Object")), ("bufferSize", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("TcpReceiveLine", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("socket", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("TcpClose", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("socket", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("TcpIsConnected", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("socket", _typeManager.GetType("Object")) });
+
+            // Networking - TCP Server
+            RegisterStdLibFunction("TcpListen", SymbolKind.Function, _typeManager.GetType("Object"),
+                new[] { ("port", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("TcpAccept", SymbolKind.Function, _typeManager.GetType("Object"),
+                new[] { ("listener", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("TcpStopListener", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("listener", _typeManager.GetType("Object")) });
+
+            // Networking - UDP
+            RegisterStdLibFunction("UdpCreate", SymbolKind.Function, _typeManager.GetType("Object"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("UdpBind", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("socket", _typeManager.GetType("Object")), ("port", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("UdpSend", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("socket", _typeManager.GetType("Object")), ("host", _typeManager.GetType("String")), ("port", _typeManager.GetType("Integer")), ("data", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("UdpReceive", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("socket", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("UdpClose", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("socket", _typeManager.GetType("Object")) });
+
+            // Networking - HTTP
+            RegisterStdLibFunction("HttpGet", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("url", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("HttpPost", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("url", _typeManager.GetType("String")), ("data", _typeManager.GetType("String")), ("contentType", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("HttpDownload", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("url", _typeManager.GetType("String")), ("filePath", _typeManager.GetType("String")) });
+
+            // JSON Functions
+            RegisterStdLibFunction("JsonParse", SymbolKind.Function, _typeManager.GetType("Object"),
+                new[] { ("jsonString", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("JsonStringify", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("obj", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("JsonGet", SymbolKind.Function, _typeManager.GetType("Object"),
+                new[] { ("json", _typeManager.GetType("Object")), ("path", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("JsonSet", SymbolKind.Function, _typeManager.GetType("Object"),
+                new[] { ("json", _typeManager.GetType("Object")), ("path", _typeManager.GetType("String")), ("value", _typeManager.GetType("Object")) });
+
+            RegisterStdLibFunction("JsonIsValid", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("jsonString", _typeManager.GetType("String")) });
+
+            // Regex Functions
+            RegisterStdLibFunction("RegexMatch", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("input", _typeManager.GetType("String")), ("pattern", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("RegexMatches", SymbolKind.Function, _typeManager.GetType("Object"),
+                new[] { ("input", _typeManager.GetType("String")), ("pattern", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("RegexReplace", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("input", _typeManager.GetType("String")), ("pattern", _typeManager.GetType("String")), ("replacement", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("RegexSplit", SymbolKind.Function, _typeManager.GetType("Object"),
+                new[] { ("input", _typeManager.GetType("String")), ("pattern", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("IsMatch", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                new[] { ("input", _typeManager.GetType("String")), ("pattern", _typeManager.GetType("String")) });
+
+            // Environment Functions
+            RegisterStdLibFunction("GetEnv", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("name", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("SetEnv", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("name", _typeManager.GetType("String")), ("value", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("GetArgs", SymbolKind.Function, _typeManager.GetType("Object"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("GetExePath", SymbolKind.Function, _typeManager.GetType("String"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("GetMachineName", SymbolKind.Function, _typeManager.GetType("String"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("GetUserName", SymbolKind.Function, _typeManager.GetType("String"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("GetOSVersion", SymbolKind.Function, _typeManager.GetType("String"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("GetTempPath", SymbolKind.Function, _typeManager.GetType("String"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("Exit", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("code", _typeManager.GetType("Integer")) });
+
+            // Console Functions
+            RegisterStdLibFunction("Cls", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("ClearScreen", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("SetForeColor", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("color", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("SetBackColor", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("color", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("ResetColor", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("SetCursorPos", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("x", _typeManager.GetType("Integer")), ("y", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("GetCursorX", SymbolKind.Function, _typeManager.GetType("Integer"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("GetCursorY", SymbolKind.Function, _typeManager.GetType("Integer"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("Beep", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("ReadKey", SymbolKind.Function, _typeManager.GetType("String"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("KeyAvailable", SymbolKind.Function, _typeManager.GetType("Boolean"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("SetTitle", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("title", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("GetWindowWidth", SymbolKind.Function, _typeManager.GetType("Integer"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("GetWindowHeight", SymbolKind.Function, _typeManager.GetType("Integer"),
+                Array.Empty<(string, TypeInfo)>());
+
+            // Process Functions
+            RegisterStdLibFunction("Shell", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("command", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("ShellAsync", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("command", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("Run", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("exePath", _typeManager.GetType("String")), ("arguments", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("RunHidden", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("exePath", _typeManager.GetType("String")), ("arguments", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("KillProcess", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("processId", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("GetProcessId", SymbolKind.Function, _typeManager.GetType("Integer"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("GetProcesses", SymbolKind.Function, _typeManager.GetType("Object"),
+                Array.Empty<(string, TypeInfo)>());
+
+            RegisterStdLibFunction("Sleep", SymbolKind.Subroutine, _typeManager.GetType("Void"),
+                new[] { ("milliseconds", _typeManager.GetType("Integer")) });
+
+            // Crypto Functions
+            RegisterStdLibFunction("MD5", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("data", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("SHA1", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("data", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("SHA256", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("data", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("Base64Encode", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("data", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("Base64Decode", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("data", _typeManager.GetType("String")) });
+
+            RegisterStdLibFunction("RandomBytes", SymbolKind.Function, _typeManager.GetType("Object"),
+                new[] { ("count", _typeManager.GetType("Integer")) });
+
+            RegisterStdLibFunction("NewGuid", SymbolKind.Function, _typeManager.GetType("String"),
+                Array.Empty<(string, TypeInfo)>());
         }
 
         private void RegisterStdLibFunction(string name, SymbolKind kind, TypeInfo returnType, (string name, TypeInfo type)[] parameters)
@@ -335,6 +671,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return _typeManager.ObjectType;
             }
 
+            // Handle fixed-length strings
+            if (typeRef.IsFixedLengthString)
+            {
+                var fixedStringType = new TypeInfo($"String*{typeRef.FixedStringLength}", TypeKind.Primitive);
+                fixedStringType.IsFixedLengthString = true;
+                fixedStringType.FixedStringLength = typeRef.FixedStringLength;
+                return fixedStringType;
+            }
+
             // Handle nullable types
             if (typeRef.IsNullable)
             {
@@ -349,7 +694,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         /// <summary>
         /// Resolves a type name by checking the current scope for type parameters first,
-        /// then falling back to the type manager.
+        /// then falling back to the type manager, and finally checking for .NET types.
         /// </summary>
         private TypeInfo ResolveTypeName(string name)
         {
@@ -361,7 +706,49 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             // Fall back to the type manager
-            return _typeManager.GetType(name);
+            var type = _typeManager.GetType(name);
+            if (type != null)
+            {
+                return type;
+            }
+
+            // Check if this could be a .NET type
+            if (IsNetType(name))
+            {
+                // Create a synthetic type for .NET types
+                return new TypeInfo(name, TypeKind.Class);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Checks if a type name could be a .NET type
+        /// </summary>
+        private bool IsNetType(string name)
+        {
+            // Fully qualified .NET type (e.g., System.IO.File)
+            if (name.Contains('.'))
+            {
+                var parts = name.Split('.');
+                var rootNamespace = parts[0];
+                // Check if it starts with a known .NET root namespace
+                if (rootNamespace.Equals("System", StringComparison.OrdinalIgnoreCase) ||
+                    rootNamespace.Equals("Microsoft", StringComparison.OrdinalIgnoreCase) ||
+                    rootNamespace.Equals("Windows", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            // Check if it's a commonly known .NET type
+            if (CommonNetTypes.Contains(name))
+            {
+                // Only allow if we have any .NET usings imported
+                return _netNamespaces.Count > 0;
+            }
+
+            return false;
         }
 
         // ====================================================================
@@ -662,6 +1049,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             // Process members
+            foreach (var member in node.Members)
+            {
+                var memberType = ResolveTypeReference(member.Type);
+                var memberSymbol = new Symbol(member.Name, SymbolKind.Variable, memberType, member.Line, member.Column);
+                type.Members[member.Name] = memberSymbol;
+            }
+        }
+
+        public void Visit(UnionNode node)
+        {
+            var type = _typeManager.DefineType(node.Name, TypeKind.Union);
+            if (type == null)
+            {
+                Error($"Union '{node.Name}' is already defined", node.Line, node.Column);
+                return;
+            }
+
+            var symbol = new Symbol(node.Name, SymbolKind.Type, type, node.Line, node.Column);
+            if (!_currentScope.Define(symbol))
+            {
+                Error($"Symbol '{node.Name}' is already defined in this scope", node.Line, node.Column);
+            }
+
+            // Process members - in a union, all members share the same memory location
             foreach (var member in node.Members)
             {
                 var memberType = ResolveTypeReference(member.Type);
@@ -1090,13 +1501,33 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(UsingDirectiveNode node)
         {
+            // Track .NET namespaces for type resolution
+            if (node.IsNetNamespace)
+            {
+                _netNamespaces.Add(node.Namespace);
+
+                // Load types from the TypeRegistry if configured
+                if (_typeRegistry != null)
+                {
+                    _typeRegistry.LoadNamespace(node.Namespace);
+                }
+            }
+
             // Track the using directive for module resolution
             if (_moduleRegistry != null && _currentUnit != null)
             {
-                var usingInfo = new UsingInfo(node.Namespace, node.Line, node.Column);
+                var usingInfo = new UsingInfo(node.Namespace, node.Line, node.Column, node.IsNetNamespace, node.Alias);
                 _currentUnit.Usings.Add(usingInfo);
 
-                // Resolve namespace and import symbols
+                // If this is a .NET namespace, don't try to resolve as BasicLang files
+                if (node.IsNetNamespace)
+                {
+                    // .NET namespaces are passed through to the backend
+                    // No file resolution needed
+                    return;
+                }
+
+                // Resolve namespace and import symbols (for BasicLang modules)
                 var files = _moduleResolver?.ResolveNamespace(node.Namespace, _currentUnit.FilePath);
                 if (files != null && files.Count > 0)
                 {
@@ -1841,6 +2272,153 @@ namespace BasicLang.Compiler.SemanticAnalysis
             ExitScope();
         }
 
+        public void Visit(InlineCodeNode node)
+        {
+            // Validate the language is one of the supported targets
+            var supportedLanguages = new[] { "csharp", "cpp", "llvm", "msil" };
+            if (!supportedLanguages.Contains(node.Language.ToLower()))
+            {
+                Error($"Unsupported inline code language '{node.Language}'. Supported languages: {string.Join(", ", supportedLanguages)}", node.Line, node.Column);
+            }
+
+            // Note: The actual code content is not validated during semantic analysis.
+            // It will be passed through to the appropriate code generator.
+            // The code generator may perform additional validation or simply emit the code as-is.
+        }
+
+        // ====================================================================
+        // Preprocessor Directives
+        // ====================================================================
+
+        public void Visit(PreprocessorDefineNode node)
+        {
+            // Register the preprocessor symbol in the preprocessor context
+            // This is typically handled during a preprocessing phase before parsing
+            // For now, just validate the name
+            if (string.IsNullOrEmpty(node.Name))
+            {
+                Error("Preprocessor #Define requires a symbol name", node.Line, node.Column);
+            }
+        }
+
+        public void Visit(PreprocessorUndefineNode node)
+        {
+            if (string.IsNullOrEmpty(node.Name))
+            {
+                Error("Preprocessor #Undefine requires a symbol name", node.Line, node.Column);
+            }
+        }
+
+        public void Visit(PreprocessorIfNode node)
+        {
+            // Evaluate the condition at compile time
+            // The condition should reference defined preprocessor symbols
+            node.Condition?.Accept(this);
+
+            // Analyze the then body
+            foreach (var stmt in node.ThenBody)
+            {
+                stmt.Accept(this);
+            }
+
+            // Analyze else-if clauses
+            foreach (var elseIf in node.ElseIfClauses)
+            {
+                elseIf.Condition?.Accept(this);
+                foreach (var stmt in elseIf.Body)
+                {
+                    stmt.Accept(this);
+                }
+            }
+
+            // Analyze else body
+            foreach (var stmt in node.ElseBody)
+            {
+                stmt.Accept(this);
+            }
+        }
+
+        public void Visit(PreprocessorIncludeNode node)
+        {
+            if (string.IsNullOrEmpty(node.FilePath))
+            {
+                Error("Preprocessor #Include requires a file path", node.Line, node.Column);
+            }
+        }
+
+        public void Visit(PreprocessorConstNode node)
+        {
+            if (string.IsNullOrEmpty(node.Name))
+            {
+                Error("Preprocessor #Const requires a constant name", node.Line, node.Column);
+            }
+
+            node.Value?.Accept(this);
+
+            // The constant should evaluate to a compile-time constant value
+        }
+
+        public void Visit(PreprocessorRegionNode node)
+        {
+            // Regions are purely organizational - just analyze the body
+            foreach (var stmt in node.Body)
+            {
+                stmt.Accept(this);
+            }
+        }
+
+        public void Visit(DeclareNode node)
+        {
+            // Validate the declare statement
+            if (string.IsNullOrEmpty(node.Name))
+            {
+                Error("Declare statement requires a function/sub name", node.Line, node.Column);
+                return;
+            }
+
+            if (string.IsNullOrEmpty(node.LibraryName))
+            {
+                Error("Declare statement requires a Lib clause specifying the library name", node.Line, node.Column);
+            }
+
+            // Resolve parameter types
+            foreach (var param in node.Parameters)
+            {
+                param.Accept(this);
+            }
+
+            // Resolve return type
+            TypeInfo returnType = _typeManager.VoidType;
+            if (node.IsFunction && node.ReturnType != null)
+            {
+                returnType = ResolveTypeReference(node.ReturnType);
+            }
+
+            // Register the declared function in the current scope
+            var symbol = new Symbol(node.Name, node.IsFunction ? SymbolKind.Function : SymbolKind.Subroutine, returnType, node.Line, node.Column)
+            {
+                IsExtern = true,
+                ReturnType = returnType
+            };
+
+            // Add parameters to the symbol
+            foreach (var param in node.Parameters)
+            {
+                var paramType = ResolveTypeReference(param.Type);
+                var paramSymbol = new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column)
+                {
+                    IsByRef = param.IsByRef,
+                    IsOptional = param.IsOptional
+                };
+                symbol.Parameters.Add(paramSymbol);
+            }
+
+            if (!_currentScope.Define(symbol))
+            {
+                Error($"Duplicate declaration of '{node.Name}'", node.Line, node.Column);
+            }
+        }
+
         // ====================================================================
         // Statements
         // ====================================================================
@@ -2399,6 +2977,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     resultType = _typeManager.CreatePointerType(operandType);
                     break;
 
+                case "Deref":
+                    // Dereference pointer
+                    if (!operandType.IsPointer)
+                    {
+                        Error($"Cannot dereference non-pointer type '{operandType}'", node.Line, node.Column);
+                        resultType = _typeManager.ObjectType;
+                    }
+                    else
+                    {
+                        // For pointer types, return the element type
+                        resultType = operandType.ElementType ?? _typeManager.ObjectType;
+                    }
+                    break;
+
                 default:
                     Error($"Unknown unary operator '{node.Operator}'", node.Line, node.Column);
                     resultType = _typeManager.ObjectType;
@@ -2493,8 +3085,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             if (symbol == null)
             {
-                Error($"Undefined identifier '{node.Name}'", node.Line, node.Column);
-                SetNodeType(node, _typeManager.ObjectType);
+                // Check if this could be a .NET static class (e.g., Console, Math, File)
+                if (IsNetType(node.Name))
+                {
+                    // Treat as a .NET type reference - create synthetic type
+                    SetNodeType(node, new TypeInfo(node.Name, TypeKind.Class));
+                }
+                else
+                {
+                    Error($"Undefined identifier '{node.Name}'", node.Line, node.Column);
+                    SetNodeType(node, _typeManager.ObjectType);
+                }
             }
             else
             {
@@ -2519,6 +3120,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 SetNodeSymbol(node, memberSymbol);
                 SetNodeType(node, memberSymbol.Type);
+            }
+            else if (IsNetType(objectType.Name))
+            {
+                // For .NET types, we don't validate member access - trust the user
+                // The C# compiler will catch any errors
+                SetNodeType(node, _typeManager.ObjectType);
             }
             else
             {

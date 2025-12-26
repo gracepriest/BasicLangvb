@@ -144,7 +144,18 @@ namespace BasicLang.Compiler
             }
             Unindent();
         }
-        
+
+        public void Visit(UnionNode node)
+        {
+            WriteLine($"Union {node.Name}");
+            Indent();
+            foreach (var member in node.Members)
+            {
+                member.Accept(this);
+            }
+            Unindent();
+        }
+
         public void Visit(TypeNode node)
         {
             WriteLine($"Type {node.Name}");
@@ -1060,6 +1071,136 @@ namespace BasicLang.Compiler
                 }
             }
             Unindent();
+        }
+
+        public void Visit(InlineCodeNode node)
+        {
+            WriteLine($"Inline Code ({node.Language}):");
+            Indent();
+            foreach (var line in node.Code.Split('\n'))
+            {
+                WriteLine(line.TrimEnd());
+            }
+            Unindent();
+        }
+
+        public void Visit(PreprocessorDefineNode node)
+        {
+            WriteLine($"#Define {node.Name}" + (node.Value != null ? $" = {node.Value}" : ""));
+        }
+
+        public void Visit(PreprocessorUndefineNode node)
+        {
+            WriteLine($"#Undefine {node.Name}");
+        }
+
+        public void Visit(PreprocessorIfNode node)
+        {
+            WriteLine("#If:");
+            Indent();
+            WriteLine("Condition:");
+            Indent();
+            node.Condition?.Accept(this);
+            Unindent();
+            WriteLine("Then:");
+            Indent();
+            foreach (var stmt in node.ThenBody)
+            {
+                stmt.Accept(this);
+            }
+            Unindent();
+
+            foreach (var elseIf in node.ElseIfClauses)
+            {
+                WriteLine("#ElseIf:");
+                Indent();
+                WriteLine("Condition:");
+                Indent();
+                elseIf.Condition?.Accept(this);
+                Unindent();
+                WriteLine("Body:");
+                Indent();
+                foreach (var stmt in elseIf.Body)
+                {
+                    stmt.Accept(this);
+                }
+                Unindent();
+                Unindent();
+            }
+
+            if (node.ElseBody.Count > 0)
+            {
+                WriteLine("#Else:");
+                Indent();
+                foreach (var stmt in node.ElseBody)
+                {
+                    stmt.Accept(this);
+                }
+                Unindent();
+            }
+            Unindent();
+        }
+
+        public void Visit(PreprocessorIncludeNode node)
+        {
+            WriteLine($"#Include \"{node.FilePath}\"");
+        }
+
+        public void Visit(PreprocessorConstNode node)
+        {
+            WriteLine($"#Const {node.Name}:");
+            Indent();
+            node.Value?.Accept(this);
+            Unindent();
+        }
+
+        public void Visit(PreprocessorRegionNode node)
+        {
+            WriteLine($"#Region {node.Name}:");
+            Indent();
+            foreach (var stmt in node.Body)
+            {
+                stmt.Accept(this);
+            }
+            Unindent();
+            WriteLine("#End Region");
+        }
+
+        public void Visit(DeclareNode node)
+        {
+            var declType = node.IsFunction ? "Function" : "Sub";
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"Declare {declType} {node.Name}");
+
+            if (node.Convention != CallingConvention.Default)
+            {
+                sb.Append($" {node.Convention}");
+            }
+
+            sb.Append($" Lib \"{node.LibraryName}\"");
+
+            if (!string.IsNullOrEmpty(node.AliasName))
+            {
+                sb.Append($" Alias \"{node.AliasName}\"");
+            }
+
+            sb.Append(" (");
+
+            for (int i = 0; i < node.Parameters.Count; i++)
+            {
+                if (i > 0) sb.Append(", ");
+                var param = node.Parameters[i];
+                sb.Append($"{param.Name} As {param.Type?.Name ?? "Object"}");
+            }
+
+            sb.Append(")");
+
+            if (node.IsFunction && node.ReturnType != null)
+            {
+                sb.Append($" As {node.ReturnType.Name}");
+            }
+
+            WriteLine(sb.ToString());
         }
     }
 }

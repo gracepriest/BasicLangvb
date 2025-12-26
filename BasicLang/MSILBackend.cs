@@ -1935,8 +1935,74 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _localIndices[varName] = localIndex;
             }
             WriteLine($"    stloc {_localIndices[varName]}");
+        }
 
-            // Stack: push elem, pop tuple = net 0
+        public override void Visit(IRTryCatch tryCatch)
+        {
+            // MSIL exception handling with .try/.catch directives
+            WriteLine("    .try");
+            WriteLine("    {");
+            foreach (var inst in tryCatch.TryBlock.Instructions)
+            {
+                if (inst is IRBranch or IRConditionalBranch) continue;
+                inst.Accept(this);
+            }
+            WriteLine("        leave EndTry");
+            WriteLine("    }");
+
+            foreach (var catchClause in tryCatch.CatchClauses)
+            {
+                var exType = catchClause.ExceptionType?.Name ?? "[mscorlib]System.Exception";
+                if (!exType.StartsWith("["))
+                    exType = $"[mscorlib]System.{exType}";
+                WriteLine($"    catch {exType}");
+                WriteLine("    {");
+
+                // Store exception to local if variable name is provided
+                if (!string.IsNullOrEmpty(catchClause.VariableName))
+                {
+                    var varName = SanitizeName(catchClause.VariableName);
+                    if (!_localIndices.ContainsKey(varName))
+                    {
+                        var localIndex = _localCounter++;
+                        _localIndices[varName] = localIndex;
+                    }
+                    WriteLine($"        stloc {_localIndices[varName]}");
+                }
+                else
+                {
+                    WriteLine("        pop"); // Pop exception if not used
+                }
+
+                foreach (var inst in catchClause.Block.Instructions)
+                {
+                    if (inst is IRBranch or IRConditionalBranch) continue;
+                    inst.Accept(this);
+                }
+                WriteLine("        leave EndTry");
+                WriteLine("    }");
+            }
+
+            WriteLine("EndTry:");
+        }
+
+        public override void Visit(IRInlineCode inlineCode)
+        {
+            if (inlineCode.Language.ToLower() == "msil")
+            {
+                // Emit the MSIL code directly
+                WriteLine("        // Inline MSIL code");
+                foreach (var line in inlineCode.Code.Split('\n'))
+                {
+                    WriteLine($"        {line.TrimEnd()}");
+                }
+            }
+            else
+            {
+                // For non-MSIL inline code, emit a comment indicating it's not supported
+                WriteLine($"        // WARNING: Inline {inlineCode.Language} code not supported in MSIL backend");
+                WriteLine($"        // Original code ({inlineCode.Code.Length} chars) was skipped");
+            }
         }
 
         #endregion

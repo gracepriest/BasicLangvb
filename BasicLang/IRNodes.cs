@@ -60,6 +60,8 @@ namespace BasicLang.Compiler.IR
         void Visit(IRFieldAccess fieldAccess);
         void Visit(IRFieldStore fieldStore);
         void Visit(IRTupleElement tupleElement);
+        void Visit(IRTryCatch tryCatch);
+        void Visit(IRInlineCode inlineCode);
     }
     
     // ============================================================================
@@ -626,15 +628,34 @@ namespace BasicLang.Compiler.IR
     public class IRComment : IRInstruction
     {
         public string Text { get; set; }
-        
+
         public IRComment(string text)
         {
             Text = text;
         }
-        
+
         public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
 
         public override string ToString() => $"; {Text}";
+    }
+
+    /// <summary>
+    /// Inline code - raw code for a specific target language (C#, C++, LLVM, MSIL)
+    /// </summary>
+    public class IRInlineCode : IRInstruction
+    {
+        public string Language { get; set; }  // "csharp", "cpp", "llvm", "msil"
+        public string Code { get; set; }
+
+        public IRInlineCode(string language, string code)
+        {
+            Language = language;
+            Code = code;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+
+        public override string ToString() => $"inline {Language} {{ {Code.Length} chars }}";
     }
 
     /// <summary>
@@ -713,6 +734,58 @@ namespace BasicLang.Compiler.IR
         public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
 
         public override string ToString() => IsBreak ? "yield break" : $"yield return {Value}";
+    }
+
+    /// <summary>
+    /// IR Try-Catch structure - represents exception handling
+    /// </summary>
+    public class IRTryCatch : IRInstruction
+    {
+        public BasicBlock TryBlock { get; set; }
+        public List<IRCatchClause> CatchClauses { get; set; }
+        public BasicBlock FinallyBlock { get; set; }
+        public BasicBlock EndBlock { get; set; }
+
+        public IRTryCatch(BasicBlock tryBlock, List<IRCatchClause> catchClauses, BasicBlock finallyBlock, BasicBlock endBlock)
+        {
+            TryBlock = tryBlock;
+            CatchClauses = catchClauses ?? new List<IRCatchClause>();
+            FinallyBlock = finallyBlock;
+            EndBlock = endBlock;
+        }
+
+        public override void Accept(IIRVisitor visitor) => visitor.Visit(this);
+
+        public override string ToString()
+        {
+            var result = $"try {{ goto {TryBlock.Name} }}";
+            foreach (var clause in CatchClauses)
+            {
+                result += $" catch ({clause.ExceptionType?.Name ?? "Exception"} {clause.VariableName}) {{ goto {clause.Block.Name} }}";
+            }
+            if (FinallyBlock != null)
+            {
+                result += $" finally {{ goto {FinallyBlock.Name} }}";
+            }
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Represents a catch clause in a try-catch block
+    /// </summary>
+    public class IRCatchClause
+    {
+        public TypeInfo ExceptionType { get; set; }
+        public string VariableName { get; set; }
+        public BasicBlock Block { get; set; }
+
+        public IRCatchClause(TypeInfo exceptionType, string variableName, BasicBlock block)
+        {
+            ExceptionType = exceptionType;
+            VariableName = variableName;
+            Block = block;
+        }
     }
 
     // ============================================================================
@@ -844,6 +917,21 @@ namespace BasicLang.Compiler.IR
     }
     
     /// <summary>
+    /// Represents a .NET using directive
+    /// </summary>
+    public class NetUsingDirective
+    {
+        public string Namespace { get; set; }
+        public string Alias { get; set; }
+
+        public NetUsingDirective(string ns, string alias = null)
+        {
+            Namespace = ns;
+            Alias = alias;
+        }
+    }
+
+    /// <summary>
     /// IR Module - top-level container
     /// </summary>
     public class IRModule
@@ -859,6 +947,12 @@ namespace BasicLang.Compiler.IR
         public Dictionary<string, IRDelegate> Delegates { get; set; }
         public List<string> Namespaces { get; set; }
 
+        /// <summary>
+        /// .NET namespace imports (e.g., System.IO, System.Text)
+        /// These are passed through to the C# backend as using directives
+        /// </summary>
+        public List<NetUsingDirective> NetUsings { get; set; }
+
         public IRModule(string name)
         {
             Name = name;
@@ -871,6 +965,7 @@ namespace BasicLang.Compiler.IR
             Enums = new Dictionary<string, IREnum>(StringComparer.OrdinalIgnoreCase);
             Delegates = new Dictionary<string, IRDelegate>(StringComparer.OrdinalIgnoreCase);
             Namespaces = new List<string>();
+            NetUsings = new List<NetUsingDirective>();
         }
 
         public IRFunction CreateFunction(string name, TypeInfo returnType)
@@ -912,15 +1007,26 @@ namespace BasicLang.Compiler.IR
     {
         public string Name { get; set; }
         public bool IsFunction { get; set; }
-        public string ReturnType { get; set; }
+        public TypeInfo ReturnType { get; set; }
         public List<IRParameter> Parameters { get; set; }
         public Dictionary<string, string> PlatformImplementations { get; set; }
+
+        // C library interop properties
+        public string LibraryName { get; set; }      // The DLL/SO library name
+        public string AliasName { get; set; }        // The actual function name in the library
+        public string CallingConvention { get; set; } // Calling convention (CDecl, StdCall, etc.)
 
         public IRExternDeclaration()
         {
             Parameters = new List<IRParameter>();
             PlatformImplementations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            CallingConvention = "Default";
         }
+
+        /// <summary>
+        /// Gets the actual name to call in the library (AliasName if specified, otherwise Name)
+        /// </summary>
+        public string GetActualName() => !string.IsNullOrEmpty(AliasName) ? AliasName : Name;
 
         /// <summary>
         /// Get the implementation string for a specific platform

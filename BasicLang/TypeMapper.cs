@@ -100,8 +100,10 @@ namespace BasicLang.Compiler.CodeGen
             _typeMap["Char"] = "char";
             _typeMap["Void"] = "void";
             _typeMap["Object"] = "object";
-            _typeMap["Byte"] = "byte";
+            _typeMap["Byte"] = "sbyte";
             _typeMap["Short"] = "short";
+            _typeMap["UByte"] = "byte";
+            _typeMap["UShort"] = "ushort";
             _typeMap["UInteger"] = "uint";
             _typeMap["ULong"] = "ulong";
             _typeMap["Decimal"] = "decimal";
@@ -184,6 +186,10 @@ namespace BasicLang.Compiler.CodeGen
                 "boolean" or "bool" => "false",
                 "char" => "'\\0'",
                 "string" => "\"\"",
+                "byte" or "ubyte" => "(byte)0",
+                "short" or "ushort" => "(short)0",
+                "uinteger" => "0U",
+                "ulong" => "0UL",
                 _ => type.Kind == TypeKind.Primitive ? "default" : "null"
             };
         }
@@ -205,8 +211,10 @@ namespace BasicLang.Compiler.CodeGen
             _typeMap["Char"] = "char";
             _typeMap["Void"] = "void";
             _typeMap["Object"] = "void*";
-            _typeMap["Byte"] = "uint8_t";
+            _typeMap["Byte"] = "int8_t";
             _typeMap["Short"] = "int16_t";
+            _typeMap["UByte"] = "uint8_t";
+            _typeMap["UShort"] = "uint16_t";
             _typeMap["UInteger"] = "uint32_t";
             _typeMap["ULong"] = "uint64_t";
         }
@@ -312,7 +320,7 @@ namespace BasicLang.Compiler.CodeGen
                 includes.Add("<vector>");
 
             // Standard int types
-            if (typeName is "integer" or "long" or "byte" or "short" or "uinteger" or "ulong")
+            if (typeName is "integer" or "long" or "byte" or "short" or "ubyte" or "ushort" or "uinteger" or "ulong")
                 includes.Add("<cstdint>");
 
             return includes;
@@ -337,6 +345,8 @@ namespace BasicLang.Compiler.CodeGen
             _typeMap["Object"] = "i8*";
             _typeMap["Byte"] = "i8";
             _typeMap["Short"] = "i16";
+            _typeMap["UByte"] = "i8";
+            _typeMap["UShort"] = "i16";
             _typeMap["UInteger"] = "i32";
             _typeMap["ULong"] = "i64";
         }
@@ -461,8 +471,10 @@ namespace BasicLang.Compiler.CodeGen
             _typeMap["Char"] = "char";
             _typeMap["Void"] = "void";
             _typeMap["Object"] = "object";
-            _typeMap["Byte"] = "uint8";
+            _typeMap["Byte"] = "int8";
             _typeMap["Short"] = "int16";
+            _typeMap["UByte"] = "uint8";
+            _typeMap["UShort"] = "uint16";
             _typeMap["UInteger"] = "uint32";
             _typeMap["ULong"] = "uint64";
         }

@@ -24,6 +24,8 @@ public class TypeInfo
         public int ArraySize { get; set; } // Size of array (for fixed-size arrays)
         public bool IsPointer { get; set; }
         public bool IsNullable { get; set; }
+        public bool IsFixedLengthString { get; set; }
+        public int FixedStringLength { get; set; } // For fixed-length strings
         public bool IsAbstract { get; set; } // For abstract classes
         public Dictionary<string, Symbol> Members { get; set; }
 
@@ -40,12 +42,25 @@ public class TypeInfo
         
         public bool IsNumeric()
         {
-            return Name == "Integer" || Name == "Long" || Name == "Single" || Name == "Double";
+            return Name == "Integer" || Name == "Long" || Name == "Single" || Name == "Double" ||
+                   Name == "Byte" || Name == "Short" || Name == "UByte" || Name == "UShort" ||
+                   Name == "UInteger" || Name == "ULong";
         }
-        
+
         public bool IsIntegral()
         {
-            return Name == "Integer" || Name == "Long";
+            return Name == "Integer" || Name == "Long" || Name == "Byte" || Name == "Short" ||
+                   Name == "UByte" || Name == "UShort" || Name == "UInteger" || Name == "ULong";
+        }
+
+        public bool IsUnsigned()
+        {
+            return Name == "UByte" || Name == "UShort" || Name == "UInteger" || Name == "ULong";
+        }
+
+        public bool IsSigned()
+        {
+            return Name == "Byte" || Name == "Short" || Name == "Integer" || Name == "Long";
         }
         
         public bool IsFloatingPoint()
@@ -147,6 +162,7 @@ public class TypeInfo
         Class,
         Interface,
         Structure,
+        Union,          // Union type (like C union)
         Enum,
         UserDefinedType,
         Delegate,
@@ -376,7 +392,15 @@ public class TypeInfo
         public TypeInfo CharType { get; }
         public TypeInfo VoidType { get; }
         public TypeInfo ObjectType { get; }
-        
+
+        // Additional numeric types
+        public TypeInfo ByteType { get; }
+        public TypeInfo ShortType { get; }
+        public TypeInfo UByteType { get; }
+        public TypeInfo UShortType { get; }
+        public TypeInfo UIntegerType { get; }
+        public TypeInfo ULongType { get; }
+
         public TypeInfo ExceptionType { get; }
 
         public TypeManager()
@@ -394,6 +418,16 @@ public class TypeInfo
             VoidType = DefineBuiltInType("Void", TypeKind.Void);
             ObjectType = DefineBuiltInType("Object", TypeKind.Class);
             ExceptionType = DefineBuiltInType("Exception", TypeKind.Class);
+
+            // Additional numeric types (signed)
+            ByteType = DefineBuiltInType("Byte", TypeKind.Primitive);
+            ShortType = DefineBuiltInType("Short", TypeKind.Primitive);
+
+            // Unsigned types
+            UByteType = DefineBuiltInType("UByte", TypeKind.Primitive);
+            UShortType = DefineBuiltInType("UShort", TypeKind.Primitive);
+            UIntegerType = DefineBuiltInType("UInteger", TypeKind.Primitive);
+            ULongType = DefineBuiltInType("ULong", TypeKind.Primitive);
 
             // Add members to Exception type
             ExceptionType.Members["Message"] = new Symbol("Message", SymbolKind.Property, StringType, 0, 0);
@@ -442,13 +476,12 @@ public class TypeInfo
         
         public TypeInfo CreatePointerType(TypeInfo targetType)
         {
-            var pointerType = new TypeInfo(targetType.Name, targetType.Kind)
+            var pointerType = new TypeInfo($"Pointer To {targetType.Name}", TypeKind.Pointer)
             {
                 IsPointer = true,
-                BaseType = targetType.BaseType,
-                ElementType = targetType.ElementType
+                ElementType = targetType  // The type the pointer points to
             };
-            
+
             return pointerType;
         }
         

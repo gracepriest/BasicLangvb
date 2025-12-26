@@ -152,6 +152,8 @@ namespace BasicLang.Compiler.CodeGen
         public abstract void Visit(IRFieldAccess fieldAccess);
         public abstract void Visit(IRFieldStore fieldStore);
         public abstract void Visit(IRTupleElement tupleElement);
+        public abstract void Visit(IRTryCatch tryCatch);
+        public abstract void Visit(IRInlineCode inlineCode);
 
         /// <summary>
         /// Map IR type to target language type

@@ -35,7 +35,10 @@
       "Bash(dotnet test:*)",
       "Bash(npm update:*)",
       "Bash(grep:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(dir \"C:\\\\Users\\\\melvi\\\\source\\\\repos\\\\BasicLang\\\\TestBuildApp\\\\bin\\\\Debug\\\\net8.0\")",
+      "Bash(xargs:*)",
+      "Bash(dotnet:*)"
     ]
   }
 }

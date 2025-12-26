@@ -1,0 +1,8 @@
+<Project Sdk="BasicLang.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>TestBuildApp</RootNamespace>
+    <AssemblyName>TestBuildApp</AssemblyName>
+  </PropertyGroup>
+</Project>

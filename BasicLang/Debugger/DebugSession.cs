@@ -534,16 +534,81 @@ namespace BasicLang.Debugger
 
             if (_variables.TryGetValue(varRef, out var varInfo) && _interpreter != null)
             {
-                var locals = _interpreter.GetLocalVariables(varInfo.FrameId);
-                foreach (var local in locals)
+                if (varInfo.Type == "locals")
                 {
-                    variables.Add(new Dictionary<string, object>
+                    // Get local variables for this frame
+                    var locals = _interpreter.GetLocalVariables(varInfo.FrameId);
+                    foreach (var local in locals)
                     {
-                        ["name"] = local.Key,
-                        ["value"] = local.Value?.ToString() ?? "Nothing",
-                        ["type"] = local.Value?.GetType().Name ?? "Object",
-                        ["variablesReference"] = 0
-                    });
+                        variables.Add(CreateVariableResponse(local.Key, local.Value));
+                    }
+                }
+                else if (varInfo.Type == "object" && varInfo.Value != null)
+                {
+                    // Expand object properties
+                    var obj = varInfo.Value;
+                    var type = obj.GetType();
+
+                    // Get all public properties
+                    foreach (var prop in type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                    {
+                        try
+                        {
+                            var value = prop.GetValue(obj);
+                            variables.Add(CreateVariableResponse(prop.Name, value, $"({prop.PropertyType.Name})"));
+                        }
+                        catch
+                        {
+                            variables.Add(new Dictionary<string, object>
+                            {
+                                ["name"] = prop.Name,
+                                ["value"] = "<error reading property>",
+                                ["type"] = prop.PropertyType.Name,
+                                ["variablesReference"] = 0
+                            });
+                        }
+                    }
+
+                    // Get all public fields
+                    foreach (var field in type.GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                    {
+                        try
+                        {
+                            var value = field.GetValue(obj);
+                            variables.Add(CreateVariableResponse(field.Name, value, $"({field.FieldType.Name})"));
+                        }
+                        catch
+                        {
+                            variables.Add(new Dictionary<string, object>
+                            {
+                                ["name"] = field.Name,
+                                ["value"] = "<error reading field>",
+                                ["type"] = field.FieldType.Name,
+                                ["variablesReference"] = 0
+                            });
+                        }
+                    }
+                }
+                else if (varInfo.Type == "array" && varInfo.Value is System.Collections.IEnumerable enumerable)
+                {
+                    // Expand array/collection elements
+                    int index = 0;
+                    foreach (var item in enumerable)
+                    {
+                        variables.Add(CreateVariableResponse($"[{index}]", item));
+                        index++;
+                        if (index > 1000) // Limit to first 1000 elements
+                        {
+                            variables.Add(new Dictionary<string, object>
+                            {
+                                ["name"] = "...",
+                                ["value"] = $"({index} more items)",
+                                ["type"] = "",
+                                ["variablesReference"] = 0
+                            });
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -553,6 +618,76 @@ namespace BasicLang.Debugger
                 ["variables"] = variables
             };
             return response;
+        }
+
+        private Dictionary<string, object> CreateVariableResponse(string name, object value, string typePrefix = "")
+        {
+            if (value == null)
+            {
+                return new Dictionary<string, object>
+                {
+                    ["name"] = name,
+                    ["value"] = "Nothing",
+                    ["type"] = "Object",
+                    ["variablesReference"] = 0
+                };
+            }
+
+            var type = value.GetType();
+            var typeName = typePrefix + type.Name;
+            int varRef = 0;
+            string displayValue;
+
+            // Handle primitive types
+            if (type.IsPrimitive || value is string || value is decimal)
+            {
+                displayValue = FormatValue(value);
+            }
+            // Handle arrays and collections
+            else if (value is System.Collections.IEnumerable enumerable && !(value is string))
+            {
+                int count = 0;
+                foreach (var _ in enumerable) count++;
+
+                displayValue = $"{type.Name} ({count} items)";
+                varRef = _nextVariableRef++;
+                _variables[varRef] = new VariableInfo
+                {
+                    Type = "array",
+                    Value = value
+                };
+            }
+            // Handle complex objects
+            else
+            {
+                displayValue = $"{{{type.Name}}}";
+                varRef = _nextVariableRef++;
+                _variables[varRef] = new VariableInfo
+                {
+                    Type = "object",
+                    Value = value
+                };
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["name"] = name,
+                ["value"] = displayValue,
+                ["type"] = typeName,
+                ["variablesReference"] = varRef
+            };
+        }
+
+        private string FormatValue(object value)
+        {
+            if (value == null) return "Nothing";
+            if (value is string s) return $"\"{s}\"";
+            if (value is char c) return $"'{c}'";
+            if (value is bool b) return b ? "True" : "False";
+            if (value is float f) return f.ToString("G") + "F";
+            if (value is double d) return d.ToString("G");
+            if (value is decimal dec) return dec.ToString("G") + "D";
+            return value.ToString();
         }
 
         private DAPResponse HandleContinue(DAPMessage request)
@@ -767,6 +902,8 @@ namespace BasicLang.Debugger
     {
         public int FrameId { get; set; }
         public string Type { get; set; }
+        public object Value { get; set; }
+        public string Name { get; set; }
     }
 
     public class StackFrameInfo

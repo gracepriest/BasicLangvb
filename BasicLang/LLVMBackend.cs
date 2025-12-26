@@ -2068,6 +2068,50 @@ namespace BasicLang.Compiler.CodeGen.LLVM
             _valueNames[tupleElement] = result;
         }
 
+        public override void Visit(IRTryCatch tryCatch)
+        {
+            // LLVM exception handling requires personality function and landingpad
+            // This is a simplified stub - full implementation would need LLVM exception intrinsics
+            WriteLine("; TODO: Exception handling not fully implemented in LLVM backend");
+
+            // Generate try block instructions inline
+            foreach (var inst in tryCatch.TryBlock.Instructions)
+            {
+                if (inst is IRBranch or IRConditionalBranch) continue;
+                inst.Accept(this);
+            }
+
+            // Generate catch block instructions (simplified - no actual exception handling)
+            foreach (var catchClause in tryCatch.CatchClauses)
+            {
+                WriteLine($"; Catch block for {catchClause.ExceptionType?.Name ?? "Exception"}");
+                foreach (var inst in catchClause.Block.Instructions)
+                {
+                    if (inst is IRBranch or IRConditionalBranch) continue;
+                    inst.Accept(this);
+                }
+            }
+        }
+
+        public override void Visit(IRInlineCode inlineCode)
+        {
+            if (inlineCode.Language.ToLower() == "llvm")
+            {
+                // Emit the LLVM IR code directly
+                WriteLine("; Inline LLVM IR code");
+                foreach (var line in inlineCode.Code.Split('\n'))
+                {
+                    WriteLine(line.TrimEnd());
+                }
+            }
+            else
+            {
+                // For non-LLVM inline code, emit a comment indicating it's not supported
+                WriteLine($"; WARNING: Inline {inlineCode.Language} code not supported in LLVM backend");
+                WriteLine($"; Original code ({inlineCode.Code.Length} chars) was skipped");
+            }
+        }
+
         #endregion
 
         private string LoadIfNeeded(IRValue value, string llvmValue)

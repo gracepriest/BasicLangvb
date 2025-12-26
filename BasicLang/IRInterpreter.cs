@@ -162,6 +162,11 @@ namespace BasicLang.Compiler.Interpreter
                     var tgt = IsTruthy(cond) ? condBranch.TrueTarget : condBranch.FalseTarget;
                     return ExecuteBlock(tgt, frame);
 
+                case IRInlineCode inlineCode:
+                    // Inline code cannot be executed by the interpreter
+                    // This would require a JIT compiler or embedding the target runtime
+                    throw new InvalidOperationException($"Cannot interpret inline {inlineCode.Language} code in the interpreter. Use code generation instead.");
+
                 default:
                     return null;
             }
